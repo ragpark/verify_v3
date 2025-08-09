@@ -771,6 +771,7 @@ def copy_moodle_files():
         learner_id = data.get('learner_id')
         course_id = data.get('course_id')
         selections = data.get('file_ids', [])
+        print(f"Received file selections: {selections}")
 
         copied_files = []
         errors = []
@@ -787,6 +788,8 @@ def copy_moodle_files():
                 filename = item.get('filename') or item.get('name')
             else:
                 file_id = item
+
+            print(f"Processing file - id: {file_id}, url: {file_url}, name: {filename}")
 
             if not file_url:
                 errors.append({'id': file_id, 'error': 'Missing file URL'})
@@ -1410,7 +1413,14 @@ def render_admin_interface_with_token(lti_data, session_token):
                 selectedFiles = [];
                 document.querySelectorAll('#fileBrowser input[type="checkbox"]:checked').forEach(cb => {
                     const fileId = cb.id.replace('file-', '');
-                    selectedFiles.push(fileId);
+                    const file = userFiles.find(f => String(f.id) === fileId);
+                    if (file) {
+                        selectedFiles.push({
+                            id: file.id,
+                            url: file.url,
+                            name: file.name
+                        });
+                    }
                 });
                 
                 const copyBtn = document.getElementById('copyFilesBtn');
@@ -1440,7 +1450,7 @@ def render_admin_interface_with_token(lti_data, session_token):
                     learner_id: selectedLearner.id,
                     learner_name: selectedLearner.name,
                     course_id: '{{ lti_data.course_id }}',
-                    file_ids: selectedFiles,
+                    file_ids: selectedFiles.map(f => ({ id: f.id, url: f.url, name: f.name })),
                     token: SESSION_TOKEN
                 };
                 
@@ -1909,7 +1919,14 @@ def render_student_interface_with_token(lti_data, session_token):
                 selectedFiles = [];
                 document.querySelectorAll('#fileBrowser input[type="checkbox"]:checked').forEach(cb => {
                     const fileId = cb.id.replace('file-', '');
-                    selectedFiles.push(fileId);
+                    const file = userFiles.find(f => String(f.id) === fileId);
+                    if (file) {
+                        selectedFiles.push({
+                            id: file.id,
+                            url: file.url,
+                            name: file.name
+                        });
+                    }
                 });
                 
                 const copyBtn = document.getElementById('copyFilesBtn');
@@ -1939,7 +1956,7 @@ def render_student_interface_with_token(lti_data, session_token):
                     learner_id: selectedLearner.id,
                     learner_name: selectedLearner.name,
                     course_id: '{{ lti_data.course_id }}',
-                    file_ids: selectedFiles
+                    file_ids: selectedFiles.map(f => ({ id: f.id, url: f.url, name: f.name }))
                 };
                 
                 fetch('/copy_moodle_files', {
