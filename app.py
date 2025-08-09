@@ -1303,8 +1303,32 @@ def index():
             'config': '/config.json',
             'debug': '/debug',
             'test_moodle_api': '/test_moodle_api',
+            'get_user_files': '/get_user_files/<user_id>',
+            'copy_moodle_files': '/copy_moodle_files',
+            'upload_files': '/upload_files',
+            'download_file': '/download_file/<file_id>',
+            'delete_file': '/delete_file/<file_id>',
             'health': '/health'
-        }
+        },
+        'available_routes': [str(rule) for rule in app.url_map.iter_rules()]
+    })
+
+# Health check endpoint
+@app.route('/health')
+def health_check():
+    return jsonify({
+        'status': 'healthy', 
+        'timestamp': datetime.utcnow().isoformat(),
+        'routes_count': len(list(app.url_map.iter_rules())),
+        'moodle_configured': bool(MOODLE_CONFIG['token'])
+    })
+
+# Simple test endpoint to verify routing works
+@app.route('/test_route')
+def test_route():
+    return jsonify({
+        'message': 'Route test successful',
+        'timestamp': datetime.utcnow().isoformat()
     })
 
 # Debug endpoint to show current configuration
@@ -1384,5 +1408,13 @@ def test_moodle_api():
     })
 
 if __name__ == '__main__':
+    print("=== STARTING LTI 1.3 TOOL SERVER ===")
+    print(f"Moodle API configured: {bool(MOODLE_CONFIG['token'])}")
+    print(f"Keys loaded: {private_key is not None and public_key is not None}")
+    print(f"Available routes:")
+    for rule in app.url_map.iter_rules():
+        print(f"  {rule.rule} -> {rule.endpoint}")
+    print("=== SERVER STARTING ===")
+    
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
