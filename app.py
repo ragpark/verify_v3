@@ -1308,14 +1308,6 @@ def index():
         'available_routes': [str(rule) for rule in app.url_map.iter_rules()]
     })
 
-# Simple test endpoint to verify routing works
-@app.route('/test_route')
-def test_route():
-    return jsonify({
-        'message': 'Route test successful',
-        'timestamp': datetime.utcnow().isoformat()
-    })
-
 # Health check endpoint
 @app.route('/health')
 def health_check():
