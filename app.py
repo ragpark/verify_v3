@@ -59,18 +59,58 @@ def moodle_api_call(function, params=None):
         data.update(params)
     
     try:
+        print(f"Making Moodle API call to: {url}")
+        print(f"Function: {function}")
+        print(f"Params: {params}")
+        print(f"Token length: {len(MOODLE_CONFIG['token'])}")
+        
         response = requests.post(url, data=data, timeout=30)
+        print(f"Response status: {response.status_code}")
+        print(f"Response headers: {dict(response.headers)}")
+        print(f"Response content preview: {response.text[:500]}")
+        
         response.raise_for_status()
+        
+        # Check if response is HTML (error page)
+        if response.text.strip().startswith('<!'):
+            return {
+                'error': f"Moodle returned HTML instead of JSON. This usually means web services are not enabled or the URL is incorrect.",
+                'debug': {
+                    'url': url,
+                    'status_code': response.status_code,
+                    'content_preview': response.text[:200]
+                }
+            }
+        
         result = response.json()
         
         if isinstance(result, dict) and 'exception' in result:
-            return {'error': f"Moodle API error: {result.get('message', 'Unknown error')}"}
+            return {
+                'error': f"Moodle API error: {result.get('message', 'Unknown error')}",
+                'debug': {
+                    'exception': result.get('exception'),
+                    'errorcode': result.get('errorcode'),
+                    'debuginfo': result.get('debuginfo')
+                }
+            }
         
         return result
+        
     except requests.exceptions.RequestException as e:
-        return {'error': f"API request failed: {str(e)}"}
+        return {
+            'error': f"API request failed: {str(e)}",
+            'debug': {
+                'url': url,
+                'function': function
+            }
+        }
     except json.JSONDecodeError as e:
-        return {'error': f"Invalid JSON response: {str(e)}"}
+        return {
+            'error': f"Invalid JSON response from Moodle: {str(e)}",
+            'debug': {
+                'response_preview': response.text[:500] if 'response' in locals() else 'No response data'
+            }
+        }
 
 def get_course_users(course_id):
     """Get users enrolled in a course"""
@@ -99,7 +139,11 @@ def get_course_users(course_id):
 
 def get_user_files(user_id, course_id=None):
     """Get files accessible to a user"""
+    
+    files = []
+    
     # Get user's private files
+    print(f"Fetching private files for user {user_id}")
     private_files = moodle_api_call('core_files_get_files', {
         'contextid': 1,  # User context
         'component': 'user',
@@ -109,7 +153,10 @@ def get_user_files(user_id, course_id=None):
         'userid': user_id
     })
     
-    files = []
+    # Check if API call failed
+    if isinstance(private_files, dict) and 'error' in private_files:
+        print(f"Private files API error: {private_files}")
+        return private_files  # Return the error
     
     if isinstance(private_files, list):
         for file_info in private_files:
@@ -123,39 +170,39 @@ def get_user_files(user_id, course_id=None):
                     'mimetype': file_info.get('mimetype', ''),
                     'timemodified': file_info.get('timemodified', 0)
                 })
+    else:
+        print(f"Unexpected private files response type: {type(private_files)}")
     
     # If course_id provided, also get course files the user can access
     if course_id:
-        # Get course context
-        course_context = moodle_api_call('core_course_get_courses_by_field', {
-            'field': 'id',
-            'value': course_id
+        print(f"Fetching course files for course {course_id}")
+        # Get course context - try a different approach
+        course_files = moodle_api_call('core_files_get_files', {
+            'contextid': 1,  # We'll try with system context first
+            'component': 'course',
+            'filearea': 'summary',
+            'itemid': 0,
+            'filepath': '/',
+            'userid': user_id
         })
         
-        if isinstance(course_context, list) and course_context:
-            # Get course files (assignments, resources, etc.)
-            course_files = moodle_api_call('core_files_get_files', {
-                'contextid': course_context[0].get('categoryid', 1),
-                'component': 'course',
-                'filearea': 'summary',
-                'itemid': 0,
-                'filepath': '/',
-                'userid': user_id
-            })
-            
-            if isinstance(course_files, list):
-                for file_info in course_files:
-                    if file_info.get('filename') != '.' and not file_info.get('isdir', False):
-                        files.append({
-                            'id': f"course_{file_info.get('contenthash', file_info.get('filename'))}",
-                            'name': file_info.get('filename', 'Unknown'),
-                            'size': file_info.get('filesize', 0),
-                            'url': file_info.get('fileurl', ''),
-                            'type': 'course',
-                            'mimetype': file_info.get('mimetype', ''),
-                            'timemodified': file_info.get('timemodified', 0)
-                        })
+        if isinstance(course_files, dict) and 'error' in course_files:
+            print(f"Course files API error: {course_files}")
+            # Don't return error for course files, just skip them
+        elif isinstance(course_files, list):
+            for file_info in course_files:
+                if file_info.get('filename') != '.' and not file_info.get('isdir', False):
+                    files.append({
+                        'id': f"course_{file_info.get('contenthash', file_info.get('filename'))}",
+                        'name': file_info.get('filename', 'Unknown'),
+                        'size': file_info.get('filesize', 0),
+                        'url': file_info.get('fileurl', ''),
+                        'type': 'course',
+                        'mimetype': file_info.get('mimetype', ''),
+                        'timemodified': file_info.get('timemodified', 0)
+                    })
     
+    print(f"Found {len(files)} files for user {user_id}")
     return files
 
 def download_moodle_file(file_url, moodle_token):
@@ -1246,14 +1293,16 @@ def health_check():
 @app.route('/')
 def index():
     return jsonify({
-        'message': 'LTI 1.3 Tool Server',
+        'message': 'LTI 1.3 Tool Server with Moodle Integration',
         'status': 'running',
+        'moodle_api_configured': bool(MOODLE_CONFIG['token']),
         'endpoints': {
             'oidc_login': '/login',
             'lti_launch': '/launch',
             'jwks': '/.well-known/jwks.json',
             'config': '/config.json',
             'debug': '/debug',
+            'test_moodle_api': '/test_moodle_api',
             'health': '/health'
         }
     })
@@ -1262,6 +1311,12 @@ def index():
 @app.route('/debug')
 def debug_config():
     """Show current LTI configuration for debugging"""
+    
+    # Test Moodle API if configured
+    moodle_api_test = None
+    if MOODLE_CONFIG['token']:
+        moodle_api_test = moodle_api_call('core_webservice_get_site_info')
+    
     return jsonify({
         'lti_config': {
             'client_id': LTI_CONFIG['client_id'],
@@ -1271,6 +1326,13 @@ def debug_config():
             'auth_token_url': LTI_CONFIG['auth_token_url'],
             'key_set_url': LTI_CONFIG['key_set_url'],
         },
+        'moodle_config': {
+            'url': MOODLE_CONFIG['url'],
+            'token_configured': bool(MOODLE_CONFIG['token']),
+            'token_length': len(MOODLE_CONFIG['token']) if MOODLE_CONFIG['token'] else 0,
+            'service': MOODLE_CONFIG['service']
+        },
+        'moodle_api_test': moodle_api_test,
         'keys_loaded': private_key is not None and public_key is not None,
         'base_url': request.url_root.rstrip('/'),
         'tool_urls': {
@@ -1287,6 +1349,38 @@ def debug_config():
             'cache_entries': len(state_cache),
             'cache_keys': list(state_cache.keys())[:5]  # Only show first 5 for privacy
         }
+    })
+
+# Test Moodle API endpoint
+@app.route('/test_moodle_api')
+def test_moodle_api():
+    """Test Moodle API connection and permissions"""
+    
+    if not MOODLE_CONFIG['token']:
+        return jsonify({
+            'success': False,
+            'error': 'Moodle API token not configured',
+            'help': 'Set MOODLE_API_TOKEN environment variable'
+        })
+    
+    tests = {}
+    
+    # Test 1: Site info
+    tests['site_info'] = moodle_api_call('core_webservice_get_site_info')
+    
+    # Test 2: Available functions
+    tests['functions'] = moodle_api_call('core_webservice_get_functions')
+    
+    # Test 3: Try to get users (if we have a course)
+    course_id = request.args.get('course_id')
+    if course_id:
+        tests['course_users'] = moodle_api_call('core_enrol_get_enrolled_users', {'courseid': course_id})
+    
+    return jsonify({
+        'success': True,
+        'moodle_url': MOODLE_CONFIG['url'],
+        'token_length': len(MOODLE_CONFIG['token']),
+        'tests': tests
     })
 
 if __name__ == '__main__':
