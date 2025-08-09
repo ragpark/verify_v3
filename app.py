@@ -156,9 +156,29 @@ def oidc_login():
     login_hint = request.args.get('login_hint') or request.form.get('login_hint')
     lti_message_hint = request.args.get('lti_message_hint') or request.form.get('lti_message_hint')
     
+    # Debug logging - print received vs expected values
+    print("=== OIDC LOGIN DEBUG ===")
+    print(f"Received issuer: '{iss}'")
+    print(f"Expected issuer: '{LTI_CONFIG['iss']}'")
+    print(f"Received client_id: '{client_id}'")
+    print(f"Expected client_id: '{LTI_CONFIG['client_id']}'")
+    print(f"Target link URI: '{target_link_uri}'")
+    print("========================")
+    
     # Validate issuer and client_id
     if iss != LTI_CONFIG['iss'] or client_id != LTI_CONFIG['client_id']:
-        return jsonify({'error': 'Invalid issuer or client_id'}), 400
+        error_details = {
+            'error': 'Invalid issuer or client_id',
+            'debug': {
+                'received_iss': iss,
+                'expected_iss': LTI_CONFIG['iss'],
+                'received_client_id': client_id,
+                'expected_client_id': LTI_CONFIG['client_id'],
+                'iss_match': iss == LTI_CONFIG['iss'],
+                'client_id_match': client_id == LTI_CONFIG['client_id']
+            }
+        }
+        return jsonify(error_details), 400
     
     # Generate state and nonce for security
     state = str(uuid.uuid4())
@@ -462,7 +482,30 @@ def index():
             'lti_launch': '/launch',
             'jwks': '/.well-known/jwks.json',
             'config': '/config.json',
+            'debug': '/debug',
             'health': '/health'
+        }
+    })
+
+# Debug endpoint to show current configuration
+@app.route('/debug')
+def debug_config():
+    """Show current LTI configuration for debugging"""
+    return jsonify({
+        'lti_config': {
+            'client_id': LTI_CONFIG['client_id'],
+            'deployment_id': LTI_CONFIG['deployment_id'],
+            'iss': LTI_CONFIG['iss'],
+            'auth_login_url': LTI_CONFIG['auth_login_url'],
+            'auth_token_url': LTI_CONFIG['auth_token_url'],
+            'key_set_url': LTI_CONFIG['key_set_url'],
+        },
+        'keys_loaded': private_key is not None and public_key is not None,
+        'base_url': request.url_root.rstrip('/'),
+        'tool_urls': {
+            'oidc_initiation_url': f"{request.url_root.rstrip('/')}/login",
+            'target_link_uri': f"{request.url_root.rstrip('/')}/launch",
+            'public_jwk_url': f"{request.url_root.rstrip('/')}/.well-known/jwks.json"
         }
     })
 
