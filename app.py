@@ -11,7 +11,7 @@ import uuid
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 
-# LTI 1.3 Configuration
+# LTI 1.3 Configuration 
 LTI_CONFIG = {
     'client_id': os.environ.get('LTI_CLIENT_ID', 'your-client-id'),
     'deployment_id': os.environ.get('LTI_DEPLOYMENT_ID', 'your-deployment-id'),
