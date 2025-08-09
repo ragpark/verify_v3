@@ -42,27 +42,107 @@ def generate_key_pair():
     
     return private_pem, public_pem
 
+# Helper function to fix PEM format
+def fix_pem_format(pem_string, key_type='PRIVATE'):
+    """Fix PEM format by ensuring proper line breaks"""
+    if not pem_string:
+        return None
+    
+    # Remove any existing line breaks and spaces
+    clean_key = pem_string.replace('\n', '').replace('\r', '').replace(' ', '')
+    
+    # Define headers and footers
+    if key_type == 'PRIVATE':
+        header = '-----BEGIN PRIVATE KEY-----'
+        footer = '-----END PRIVATE KEY-----'
+    else:
+        header = '-----BEGIN PUBLIC KEY-----'
+        footer = '-----END PUBLIC KEY-----'
+    
+    # Remove headers/footers if they exist
+    clean_key = clean_key.replace(header.replace('-', '').replace(' ', ''), '')
+    clean_key = clean_key.replace(footer.replace('-', '').replace(' ', ''), '')
+    
+    # Add proper formatting - split into 64-character lines
+    formatted_lines = [clean_key[i:i+64] for i in range(0, len(clean_key), 64)]
+    
+    # Reconstruct with proper headers, footers, and line breaks
+    return f"{header}\n" + "\n".join(formatted_lines) + f"\n{footer}"
+
 # Load or generate keys
 PRIVATE_KEY_PEM = os.environ.get('PRIVATE_KEY_PEM')
 PUBLIC_KEY_PEM = os.environ.get('PUBLIC_KEY_PEM')
 
-if not PRIVATE_KEY_PEM or not PUBLIC_KEY_PEM:
+# Alternative base64 encoded storage (more Railway-friendly)
+PRIVATE_KEY_B64 = os.environ.get('PRIVATE_KEY_B64')
+PUBLIC_KEY_B64 = os.environ.get('PUBLIC_KEY_B64')
+
+private_key = None
+public_key = None
+
+# Try to load from base64 first (more reliable for environment variables)
+if PRIVATE_KEY_B64 and PUBLIC_KEY_B64:
+    try:
+        import base64
+        PRIVATE_KEY_PEM = base64.b64decode(PRIVATE_KEY_B64).decode('utf-8')
+        PUBLIC_KEY_PEM = base64.b64decode(PUBLIC_KEY_B64).decode('utf-8')
+        print("Loaded keys from base64 environment variables")
+    except Exception as e:
+        print(f"Failed to load base64 keys: {e}")
+        PRIVATE_KEY_PEM = None
+        PUBLIC_KEY_PEM = None
+
+# Try to load and fix PEM format
+if PRIVATE_KEY_PEM and PUBLIC_KEY_PEM:
+    try:
+        # Fix PEM formatting in case newlines were lost
+        fixed_private = fix_pem_format(PRIVATE_KEY_PEM, 'PRIVATE')
+        fixed_public = fix_pem_format(PUBLIC_KEY_PEM, 'PUBLIC')
+        
+        if fixed_private and fixed_public:
+            private_key = serialization.load_pem_private_key(
+                fixed_private.encode(),
+                password=None
+            )
+            public_key = serialization.load_pem_public_key(
+                fixed_public.encode()
+            )
+            print("Successfully loaded existing keys")
+        else:
+            raise ValueError("Could not fix PEM format")
+            
+    except Exception as e:
+        print(f"Failed to load existing keys: {e}")
+        private_key = None
+        public_key = None
+
+# Generate new keys if loading failed
+if not private_key or not public_key:
     print("Generating new key pair...")
-    PRIVATE_KEY_PEM, PUBLIC_KEY_PEM = generate_key_pair()
-    print("Private Key (store this securely):")
-    print(PRIVATE_KEY_PEM.decode())
-    print("\nPublic Key (use this in Moodle configuration):")
-    print(PUBLIC_KEY_PEM.decode())
-
-# Parse keys
-private_key = serialization.load_pem_private_key(
-    PRIVATE_KEY_PEM.encode() if isinstance(PRIVATE_KEY_PEM, str) else PRIVATE_KEY_PEM,
-    password=None
-)
-
-public_key = serialization.load_pem_public_key(
-    PUBLIC_KEY_PEM.encode() if isinstance(PUBLIC_KEY_PEM, str) else PUBLIC_KEY_PEM
-)
+    private_key_pem, public_key_pem = generate_key_pair()
+    
+    try:
+        private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+        public_key = serialization.load_pem_public_key(public_key_pem)
+        
+        print("=== COPY THESE KEYS TO YOUR RAILWAY ENVIRONMENT VARIABLES ===")
+        print("\nOption 1 - PEM Format (copy exactly with all line breaks):")
+        print(f"PRIVATE_KEY_PEM=")
+        print(private_key_pem.decode())
+        print(f"\nPUBLIC_KEY_PEM=")
+        print(public_key_pem.decode())
+        
+        print("\nOption 2 - Base64 Format (recommended for Railway):")
+        import base64
+        private_b64 = base64.b64encode(private_key_pem).decode('utf-8')
+        public_b64 = base64.b64encode(public_key_pem).decode('utf-8')
+        print(f"PRIVATE_KEY_B64={private_b64}")
+        print(f"PUBLIC_KEY_B64={public_b64}")
+        print("\n=== END OF KEYS ===")
+        
+    except Exception as e:
+        print(f"Failed to generate keys: {e}")
+        raise
 
 # LTI 1.3 OIDC Login endpoint
 @app.route('/login', methods=['GET', 'POST'])
