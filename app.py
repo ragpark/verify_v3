@@ -41,10 +41,188 @@ MOODLE_CONFIG = {
     'service': os.environ.get('MOODLE_SERVICE', 'moodle_mobile_app')  # Web service name
 }
 
+# File storage configuration
+UPLOAD_FOLDER = '/tmp/lti_files'  # Railway.app temp storage
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'}
+MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
+
+# Create upload directory if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# In-memory storage for file metadata (use database in production)
+file_storage = {}
+
+# Add RSA key generation - with error handling
+def generate_key_pair():
+    """Generate RSA key pair for JWT signing"""
+    try:
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048
+        )
+        
+        private_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+        
+        public_key = private_key.public_key()
+        public_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        
+        return private_pem, public_pem
+    except Exception as e:
+        print(f"ERROR in generate_key_pair: {e}")
+        raise
+
+# Helper function to fix PEM format
+def fix_pem_format(pem_string, key_type='PRIVATE'):
+    """Fix PEM format by ensuring proper line breaks"""
+    if not pem_string:
+        return None
+    
+    try:
+        # Remove any existing line breaks and spaces
+        clean_key = pem_string.replace('\n', '').replace('\r', '').replace(' ', '')
+        
+        # Define headers and footers
+        if key_type == 'PRIVATE':
+            header = '-----BEGIN PRIVATE KEY-----'
+            footer = '-----END PRIVATE KEY-----'
+        else:
+            header = '-----BEGIN PUBLIC KEY-----'
+            footer = '-----END PUBLIC KEY-----'
+        
+        # Remove headers/footers if they exist
+        clean_key = clean_key.replace(header.replace('-', '').replace(' ', ''), '')
+        clean_key = clean_key.replace(footer.replace('-', '').replace(' ', ''), '')
+        
+        # Add proper formatting - split into 64-character lines
+        formatted_lines = [clean_key[i:i+64] for i in range(0, len(clean_key), 64)]
+        
+        # Reconstruct with proper headers, footers, and line breaks
+        return f"{header}\n" + "\n".join(formatted_lines) + f"\n{footer}"
+    except Exception as e:
+        print(f"ERROR in fix_pem_format: {e}")
+        return None
+
+# Load or generate keys - with comprehensive error handling
+print("=== LOADING RSA KEYS ===")
+
+PRIVATE_KEY_PEM = os.environ.get('PRIVATE_KEY_PEM')
+PUBLIC_KEY_PEM = os.environ.get('PUBLIC_KEY_PEM')
+PRIVATE_KEY_B64 = os.environ.get('PRIVATE_KEY_B64')
+PUBLIC_KEY_B64 = os.environ.get('PUBLIC_KEY_B64')
+
+private_key = None
+public_key = None
+
+try:
+    # Try to load from base64 first (more reliable for environment variables)
+    if PRIVATE_KEY_B64 and PUBLIC_KEY_B64:
+        try:
+            import base64
+            PRIVATE_KEY_PEM = base64.b64decode(PRIVATE_KEY_B64).decode('utf-8')
+            PUBLIC_KEY_PEM = base64.b64decode(PUBLIC_KEY_B64).decode('utf-8')
+            print("Loaded keys from base64 environment variables")
+        except Exception as e:
+            print(f"Failed to load base64 keys: {e}")
+            PRIVATE_KEY_PEM = None
+            PUBLIC_KEY_PEM = None
+
+    # Try to load and fix PEM format
+    if PRIVATE_KEY_PEM and PUBLIC_KEY_PEM:
+        try:
+            # Fix PEM formatting in case newlines were lost
+            fixed_private = fix_pem_format(PRIVATE_KEY_PEM, 'PRIVATE')
+            fixed_public = fix_pem_format(PUBLIC_KEY_PEM, 'PUBLIC')
+            
+            if fixed_private and fixed_public:
+                private_key = serialization.load_pem_private_key(
+                    fixed_private.encode(),
+                    password=None
+                )
+                public_key = serialization.load_pem_public_key(
+                    fixed_public.encode()
+                )
+                print("Successfully loaded existing keys")
+            else:
+                raise ValueError("Could not fix PEM format")
+                
+        except Exception as e:
+            print(f"Failed to load existing keys: {e}")
+            private_key = None
+            public_key = None
+
+    # Generate new keys if loading failed
+    if not private_key or not public_key:
+        print("Generating new key pair...")
+        private_key_pem, public_key_pem = generate_key_pair()
+        
+        try:
+            private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+            public_key = serialization.load_pem_public_key(public_key_pem)
+            
+            print("=== COPY THESE KEYS TO YOUR RAILWAY ENVIRONMENT VARIABLES ===")
+            print("\nOption 1 - PEM Format (copy exactly with all line breaks):")
+            print(f"PRIVATE_KEY_PEM=")
+            print(private_key_pem.decode())
+            print(f"\nPUBLIC_KEY_PEM=")
+            print(public_key_pem.decode())
+            
+            print("\nOption 2 - Base64 Format (recommended for Railway):")
+            import base64
+            private_b64 = base64.b64encode(private_key_pem).decode('utf-8')
+            public_b64 = base64.b64encode(public_key_pem).decode('utf-8')
+            print(f"PRIVATE_KEY_B64={private_b64}")
+            print(f"PUBLIC_KEY_B64={public_b64}")
+            print("\n=== END OF KEYS ===")
+            
+        except Exception as e:
+            print(f"Failed to generate keys: {e}")
+            raise
+
+except Exception as e:
+    print(f"CRITICAL ERROR in key loading: {e}")
+    import traceback
+    traceback.print_exc()
+    # Don't crash the app, but flag the issue
+    private_key = None
+    public_key = None
+
+print(f"Keys loaded successfully: {private_key is not None and public_key is not None}")
+
+# Test if keys work
+if private_key and public_key:
+    try:
+        # Test signing
+        test_data = b"test"
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        
+        signature = private_key.sign(test_data, padding.PKCS1v15(), hashes.SHA256())
+        public_key.verify(signature, test_data, padding.PKCS1v15(), hashes.SHA256())
+        print("Key pair validation successful")
+    except Exception as e:
+        print(f"Key pair validation failed: {e}")
+
+print("=== KEY LOADING COMPLETE ===")
+
+app.config.update(
+    UPLOAD_FOLDER=UPLOAD_FOLDER,
+    MAX_CONTENT_LENGTH=MAX_FILE_SIZE
+)
+
 print(f"=== STARTUP INFO ===")
 print(f"LTI_CONFIG: {LTI_CONFIG}")
 print(f"MOODLE_CONFIG: {MOODLE_CONFIG}")
 print(f"API Token configured: {bool(MOODLE_CONFIG['token'])}")
+print(f"Keys loaded: {private_key is not None and public_key is not None}")
+print(f"Upload folder: {UPLOAD_FOLDER}")
+print(f"File storage initialized: {len(file_storage)} files")
 
 # Root route - test basic routing
 @app.route('/')
