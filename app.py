@@ -397,11 +397,11 @@ def get_course_users(course_id):
     return students
 
 def get_user_files(user_id, course_id=None):
-    """Get files accessible to a user - Using mock data due to API permission limitations"""
+    """Get files accessible to a user - Updated for proper Moodle API access"""
     
     files = []
     
-    # First, verify the user exists
+    # First, verify the user exists and get their context
     print(f"Getting user info for user {user_id}")
     user_info = moodle_api_call('core_user_get_users_by_field', {
         'field': 'id',
@@ -418,67 +418,134 @@ def get_user_files(user_id, course_id=None):
     user_name = user_info[0].get('fullname', 'Unknown User')
     print(f"Found user: {user_name}")
     
-    # For now, use realistic mock data since Moodle file API requires complex permissions
-    # This lets us test the complete interface while we sort out API permissions
-    print(f"Generating mock files for user {user_name} (API permissions need configuration)")
-    
-    # Create realistic mock files based on the user
-    mock_files = [
-        {
-            'id': f'private_{user_id}_essay',
-            'name': f'{user_name.replace(" ", "_")}_research_essay.pdf',
-            'size': 2048576,  # 2MB
-            'url': f'https://cluepony.com/moodle45/pluginfile.php/mock/{user_id}/essay.pdf',
-            'type': 'private',
-            'mimetype': 'application/pdf',
-            'timemodified': int(datetime.utcnow().timestamp()) - 86400  # Yesterday
-        },
-        {
-            'id': f'private_{user_id}_presentation',
-            'name': f'{user_name.replace(" ", "_")}_project_presentation.pptx',
-            'size': 5242880,  # 5MB
-            'url': f'https://cluepony.com/moodle45/pluginfile.php/mock/{user_id}/presentation.pptx',
-            'type': 'private',
-            'mimetype': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'timemodified': int(datetime.utcnow().timestamp()) - 172800  # 2 days ago
-        },
-        {
-            'id': f'private_{user_id}_image',
-            'name': f'{user_name.replace(" ", "_")}_profile_photo.jpg',
-            'size': 1048576,  # 1MB
-            'url': f'https://cluepony.com/moodle45/pluginfile.php/mock/{user_id}/photo.jpg',
-            'type': 'private',
-            'mimetype': 'image/jpeg',
-            'timemodified': int(datetime.utcnow().timestamp()) - 259200  # 3 days ago
-        }
-    ]
-    
-    # Add course-specific files if course_id provided
+    # Method 1: Try to get user's private files using course contents
     if course_id:
-        course_files = [
+        print(f"Trying to get course contents for course {course_id}")
+        course_contents = moodle_api_call('core_course_get_contents', {
+            'courseid': course_id
+        })
+        
+        if isinstance(course_contents, list):
+            print(f"Found {len(course_contents)} course sections")
+            for section in course_contents:
+                modules = section.get('modules', [])
+                for module in modules:
+                    # Look for file-based modules (resources, assignments, etc.)
+                    if module.get('modname') in ['resource', 'assign', 'folder']:
+                        contents = module.get('contents', [])
+                        for content in contents:
+                            if content.get('type') == 'file':
+                                files.append({
+                                    'id': f"course_{content.get('filename', module.get('id'))}",
+                                    'name': content.get('filename', 'Unknown File'),
+                                    'size': content.get('filesize', 0),
+                                    'url': content.get('fileurl', ''),
+                                    'type': 'course_content',
+                                    'mimetype': content.get('mimetype', ''),
+                                    'timemodified': content.get('timemodified', 0),
+                                    'module': module.get('name', 'Unknown Module')
+                                })
+        
+        # Method 2: Try to get assignment submissions for this user
+        print(f"Trying to get assignments for course {course_id}")
+        assignments = moodle_api_call('mod_assign_get_assignments', {
+            'courseids[0]': course_id
+        })
+        
+        if isinstance(assignments, dict) and 'courses' in assignments:
+            for course in assignments['courses']:
+                course_assignments = course.get('assignments', [])
+                print(f"Found {len(course_assignments)} assignments")
+                
+                for assignment in course_assignments:
+                    assign_id = assignment.get('id')
+                    if assign_id:
+                        # Get submissions for this assignment
+                        submissions = moodle_api_call('mod_assign_get_submissions', {
+                            'assignmentids[0]': assign_id
+                        })
+                        
+                        if isinstance(submissions, dict) and 'assignments' in submissions:
+                            for assign_data in submissions['assignments']:
+                                assign_submissions = assign_data.get('submissions', [])
+                                for submission in assign_submissions:
+                                    # Check if this submission belongs to our user
+                                    if str(submission.get('userid')) == str(user_id):
+                                        plugins = submission.get('plugins', [])
+                                        for plugin in plugins:
+                                            if plugin.get('type') == 'file':
+                                                file_areas = plugin.get('fileareas', [])
+                                                for file_area in file_areas:
+                                                    area_files = file_area.get('files', [])
+                                                    for file_info in area_files:
+                                                        files.append({
+                                                            'id': f"submission_{file_info.get('filename', assign_id)}",
+                                                            'name': file_info.get('filename', 'Submission File'),
+                                                            'size': file_info.get('filesize', 0),
+                                                            'url': file_info.get('fileurl', ''),
+                                                            'type': 'assignment_submission',
+                                                            'mimetype': file_info.get('mimetype', ''),
+                                                            'timemodified': file_info.get('timemodified', 0),
+                                                            'assignment': assignment.get('name', 'Unknown Assignment')
+                                                        })
+    
+    print(f"Found {len(files)} real files from Moodle API")
+    
+    # If no real files found, provide helpful debug info and add mock files
+    if len(files) == 0:
+        print("No real files found, adding mock files for interface testing")
+        
+        # Add debug information about why no files were found
+        debug_info = {
+            'user_found': True,
+            'user_name': user_name,
+            'course_id': course_id,
+            'api_methods_tried': ['core_course_get_contents', 'mod_assign_get_assignments', 'mod_assign_get_submissions'],
+            'suggestions': [
+                'User may not have uploaded any files yet',
+                'User may not have submitted any assignments',
+                'API user may need additional permissions to access user files',
+                'Check if the course has file-based activities (assignments, resources)'
+            ]
+        }
+        
+        # Add mock files with debug info
+        mock_files = [
             {
-                'id': f'course_{course_id}_{user_id}_assignment',
-                'name': f'{user_name.replace(" ", "_")}_assignment_submission.docx',
-                'size': 1536000,  # 1.5MB
-                'url': f'https://cluepony.com/moodle45/pluginfile.php/mock/course/{course_id}/{user_id}/assignment.docx',
-                'type': 'course',
-                'mimetype': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'timemodified': int(datetime.utcnow().timestamp()) - 432000  # 5 days ago
+                'id': f'mock_private_{user_id}_essay',
+                'name': f'{user_name.replace(" ", "_")}_research_essay.pdf',
+                'size': 2048576,  # 2MB
+                'url': f'https://cluepony.com/moodle45/pluginfile.php/mock/{user_id}/essay.pdf',
+                'type': 'mock_private',
+                'mimetype': 'application/pdf',
+                'timemodified': int(datetime.utcnow().timestamp()) - 86400,  # Yesterday
+                'debug': 'Mock file - configure Moodle file API for real files'
             },
             {
-                'id': f'course_{course_id}_{user_id}_quiz',
-                'name': f'{user_name.replace(" ", "_")}_quiz_answers.pdf',
-                'size': 512000,  # 512KB
-                'url': f'https://cluepony.com/moodle45/pluginfile.php/mock/course/{course_id}/{user_id}/quiz.pdf',
-                'type': 'course',
-                'mimetype': 'application/pdf',
-                'timemodified': int(datetime.utcnow().timestamp()) - 604800  # 1 week ago
+                'id': f'mock_assignment_{user_id}_submission',
+                'name': f'{user_name.replace(" ", "_")}_assignment_submission.docx',
+                'size': 1536000,  # 1.5MB
+                'url': f'https://cluepony.com/moodle45/pluginfile.php/mock/{user_id}/assignment.docx',
+                'type': 'mock_assignment',
+                'mimetype': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'timemodified': int(datetime.utcnow().timestamp()) - 432000,  # 5 days ago
+                'debug': 'Mock file - real assignment submissions would appear here'
             }
         ]
-        mock_files.extend(course_files)
+        
+        files.extend(mock_files)
+        
+        # Store debug info for later access
+        files.append({
+            'id': 'debug_info',
+            'name': '🔧 API Debug Information',
+            'size': 0,
+            'type': 'debug',
+            'debug_data': debug_info
+        })
     
-    print(f"Generated {len(mock_files)} mock files for user {user_name}")
-    return mock_files
+    print(f"Returning {len(files)} files (real + mock) for user {user_name}")
+    return files
 
 def get_learners_in_course(course_id):
     """Get list of learners in course from Moodle API"""
