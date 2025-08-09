@@ -13,6 +13,16 @@ import mimetypes
 # Simple in-memory cache for state/nonce as fallback (not for production scale)
 state_cache = {}
 
+# LTI 1.3 Configuration
+LTI_CONFIG = {
+    'client_id': os.environ.get('LTI_CLIENT_ID', 'your-client-id'),
+    'deployment_id': os.environ.get('LTI_DEPLOYMENT_ID', 'your-deployment-id'),
+    'iss': os.environ.get('LTI_ISSUER', 'https://yourmoodle.com'),  # Your Moodle URL
+    'auth_login_url': os.environ.get('LTI_AUTH_LOGIN_URL', 'https://yourmoodle.com/mod/lti/auth.php'),
+    'auth_token_url': os.environ.get('LTI_AUTH_TOKEN_URL', 'https://yourmoodle.com/mod/lti/token.php'),
+    'key_set_url': os.environ.get('LTI_KEY_SET_URL', 'https://yourmoodle.com/mod/lti/certs.php'),
+}
+
 # Moodle API Configuration
 MOODLE_CONFIG = {
     'url': os.environ.get('MOODLE_URL', LTI_CONFIG['iss']),
@@ -174,16 +184,6 @@ app.config.update(
     UPLOAD_FOLDER=UPLOAD_FOLDER,
     MAX_CONTENT_LENGTH=MAX_FILE_SIZE
 )
-
-# LTI 1.3 Configuration
-LTI_CONFIG = {
-    'client_id': os.environ.get('LTI_CLIENT_ID', 'your-client-id'),
-    'deployment_id': os.environ.get('LTI_DEPLOYMENT_ID', 'your-deployment-id'),
-    'iss': os.environ.get('LTI_ISSUER', 'https://yourmoodle.com'),  # Your Moodle URL
-    'auth_login_url': os.environ.get('LTI_AUTH_LOGIN_URL', 'https://yourmoodle.com/mod/lti/auth.php'),
-    'auth_token_url': os.environ.get('LTI_AUTH_TOKEN_URL', 'https://yourmoodle.com/mod/lti/token.php'),
-    'key_set_url': os.environ.get('LTI_KEY_SET_URL', 'https://yourmoodle.com/mod/lti/certs.php'),
-}
 
 # Generate RSA key pair for JWT signing (in production, store these securely)
 def generate_key_pair():
