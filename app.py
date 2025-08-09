@@ -1,47 +1,4 @@
-@app.route('/copy_moodle_files', methods=['POST'])
-def copy_moodle_files():
-    """Copy selected files from Moodle to learner's account - Token-based auth"""
-    
-    print("=== COPY_MOODLE_FILES ENDPOINT CALLED ===")
-    
-    try:
-        data = request.json or {}
-        session_token = data.get('token')
-        print(f"Received token: {session_token}")
-        
-        # Try to get LTI data from token first, then fall back to session
-        lti_data = None
-        if session_token:
-            lti_data = get_lti_session(session_token)
-            print(f"Token-based LTI data found: {bool(lti_data)}")
-        
-        if not lti_data:
-            # Fallback to session
-            lti_data = session.get('lti_data')
-            print(f"Session-based LTI data found: {bool(lti_data)}")
-        
-        if not lti_data:
-            return jsonify({'success': False, 'error': 'Not authorized'}), 403
-        
-        user_roles = lti_data.get('roles', [])
-        
-        if not is_admin_user(user_roles):
-            return jsonify({'success': False, 'error': 'Admin privileges required'}), 403
-        
-        learner_id = data.get('learner_id')
-        learner_name = data.get('learner_name')
-        course_id = data.get('course_id')
-        file_ids = data.get('file_ids', [])
-        
-        print(f"Copy request: learner={learner_id}, course={course_id}, files={len(file_ids)}")
-        
-        if not all([learner_id, learner_name, course_id]) or not file_ids:
-            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
-        
-        # Get user files from Moodle
-        user_files = get_user_files(learner_id, course_id)
-        
-     import os
+import os
 import json
 import jwt
 import requests
