@@ -85,55 +85,136 @@ def test_param(param_id):
         'timestamp': datetime.utcnow().isoformat()
     })
 
-# File management endpoints - adding back gradually
+# Helper functions - adding back gradually
+def is_admin_user(roles):
+    """Check if user has admin/instructor privileges"""
+    admin_roles = [
+        'http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor',
+        'http://purl.imsglobal.org/vocab/lis/v2/membership#ContentDeveloper',
+        'http://purl.imsglobal.org/vocab/lis/v2/system/person#Administrator',
+        'Instructor',
+        'Teacher',
+        'Admin'
+    ]
+    return any(role in admin_roles for role in (roles or []))
+
+# File management endpoints - adding back authentication
 @app.route('/get_user_files/<user_id>')
 def get_user_files_endpoint(user_id):
-    """Get files for a specific user from Moodle - Enhanced Version"""
+    """Get files for a specific user from Moodle - With Auth"""
     
     print(f"=== GET_USER_FILES ENDPOINT CALLED ===")
     print(f"User ID: {user_id}")
     print(f"Course ID: {request.args.get('course_id')}")
     print(f"Session keys: {list(session.keys())}")
-    print(f"Request method: {request.method}")
-    print(f"Request URL: {request.url}")
+    
+    # Check if user has admin privileges - with better error handling
+    lti_data = session.get('lti_data')
+    if not lti_data:
+        print("No LTI data in session")
+        return jsonify({
+            'success': False, 
+            'error': 'Not authorized - no LTI session data',
+            'help': 'Try launching the tool from Moodle first',
+            'debug': {
+                'session_keys': list(session.keys()),
+                'has_lti_data': False
+            }
+        }), 403
+    
+    user_roles = lti_data.get('roles', [])
+    print(f"User roles: {user_roles}")
+    
+    if not is_admin_user(user_roles):
+        print("User is not admin")
+        return jsonify({
+            'success': False, 
+            'error': 'Admin privileges required',
+            'debug': {
+                'user_roles': user_roles,
+                'admin_check': False
+            }
+        }), 403
     
     course_id = request.args.get('course_id')
     
-    # Check if we have session data (without failing if we don't)
-    lti_data = session.get('lti_data')
-    if lti_data:
-        print(f"LTI data found in session")
-        user_roles = lti_data.get('roles', [])
-        print(f"User roles: {user_roles}")
-    else:
-        print("No LTI data in session - continuing anyway for testing")
+    # Check if API is configured
+    if not MOODLE_CONFIG['token']:
+        print("Moodle API not configured")
+        return jsonify({
+            'success': False,
+            'error': 'Moodle API not configured',
+            'help': 'Set MOODLE_API_TOKEN environment variable',
+            'debug': {
+                'token_configured': False
+            }
+        })
     
-    # For now, return mock data
+    # Return mock data for now (we'll add real API calls later)
     mock_files = [
         {
-            'id': 'file_1',
-            'name': 'sample_document.pdf',
+            'id': 'private_file1',
+            'name': 'student_essay.pdf',
             'size': 1024000,
             'type': 'private',
-            'mimetype': 'application/pdf'
+            'mimetype': 'application/pdf',
+            'url': 'https://example.com/file1'
         },
         {
-            'id': 'file_2', 
-            'name': 'course_image.jpg',
-            'size': 512000,
+            'id': 'course_file2', 
+            'name': 'lecture_slides.pptx',
+            'size': 2048000,
             'type': 'course',
-            'mimetype': 'image/jpeg'
+            'mimetype': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'url': 'https://example.com/file2'
         }
     ]
     
+    print(f"Returning {len(mock_files)} mock files")
     return jsonify({
         'success': True,
         'files': mock_files,
         'user_id': user_id,
         'course_id': course_id,
         'file_count': len(mock_files),
-        'session_available': lti_data is not None,
-        'moodle_configured': bool(MOODLE_CONFIG['token'])
+        'debug': {
+            'auth_passed': True,
+            'admin_user': True,
+            'api_configured': bool(MOODLE_CONFIG['token'])
+        }
+    })
+
+# Test route to set up proper LTI session
+@app.route('/setup_session')
+def setup_session():
+    """Set up a proper LTI session for testing"""
+    
+    session['lti_data'] = {
+        'user_id': 'test_admin',
+        'user_name': 'Test Administrator', 
+        'user_email': 'admin@test.com',
+        'course_id': '2',
+        'course_title': 'Test Course',
+        'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor'],
+        'resource_link_id': 'test_link'
+    }
+    
+    return jsonify({
+        'success': True,
+        'message': 'LTI session data set up',
+        'lti_data': session['lti_data']
+    })
+
+# Test route to clear session
+@app.route('/clear_session')
+def clear_session():
+    """Clear the session for testing"""
+    session.clear()
+    
+    return jsonify({
+        'success': True,
+        'message': 'Session cleared',
+        'session_data': dict(session)
     })
 
 # Add more file endpoints
