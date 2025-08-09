@@ -263,18 +263,320 @@ def test_param(param_id):
         'timestamp': datetime.utcnow().isoformat()
     })
 
-# Helper functions - adding back gradually
-def is_admin_user(roles):
-    """Check if user has admin/instructor privileges"""
-    admin_roles = [
-        'http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor',
-        'http://purl.imsglobal.org/vocab/lis/v2/membership#ContentDeveloper',
-        'http://purl.imsglobal.org/vocab/lis/v2/system/person#Administrator',
-        'Instructor',
-        'Teacher',
-        'Admin'
-    ]
-    return any(role in admin_roles for role in (roles or []))
+# Moodle API functions - adding back with error handling
+def moodle_api_call(function, params=None):
+    """Make a call to Moodle's web service API"""
+    if not MOODLE_CONFIG['token']:
+        return {'error': 'Moodle API token not configured'}
+    
+    url = f"{MOODLE_CONFIG['url']}/webservice/rest/server.php"
+    
+    data = {
+        'wstoken': MOODLE_CONFIG['token'],
+        'wsfunction': function,
+        'moodlewsrestformat': 'json'
+    }
+    
+    if params:
+        data.update(params)
+    
+    try:
+        print(f"Making Moodle API call to: {url}")
+        print(f"Function: {function}")
+        print(f"Params: {params}")
+        print(f"Token length: {len(MOODLE_CONFIG['token'])}")
+        
+        response = requests.post(url, data=data, timeout=30)
+        print(f"Response status: {response.status_code}")
+        print(f"Response headers: {dict(response.headers)}")
+        print(f"Response content preview: {response.text[:500]}")
+        
+        response.raise_for_status()
+        
+        # Check if response is HTML (error page)
+        if response.text.strip().startswith('<!'):
+            return {
+                'error': f"Moodle returned HTML instead of JSON. This usually means web services are not enabled or the URL is incorrect.",
+                'debug': {
+                    'url': url,
+                    'status_code': response.status_code,
+                    'content_preview': response.text[:200]
+                }
+            }
+        
+        result = response.json()
+        
+        if isinstance(result, dict) and 'exception' in result:
+            return {
+                'error': f"Moodle API error: {result.get('message', 'Unknown error')}",
+                'debug': {
+                    'exception': result.get('exception'),
+                    'errorcode': result.get('errorcode'),
+                    'debuginfo': result.get('debuginfo')
+                }
+            }
+        
+        return result
+        
+    except requests.exceptions.RequestException as e:
+        return {
+            'error': f"API request failed: {str(e)}",
+            'debug': {
+                'url': url,
+                'function': function
+            }
+        }
+    except json.JSONDecodeError as e:
+        return {
+            'error': f"Invalid JSON response from Moodle: {str(e)}",
+            'debug': {
+                'response_preview': response.text[:500] if 'response' in locals() else 'No response data'
+            }
+        }
+
+def get_course_users(course_id):
+    """Get users enrolled in a course"""
+    print(f"Getting course users for course {course_id}")
+    result = moodle_api_call('core_enrol_get_enrolled_users', {'courseid': course_id})
+    
+    if isinstance(result, dict) and 'error' in result:
+        print(f"Error getting course users: {result}")
+        return []
+    
+    # Filter to only return students (not teachers/admins)
+    students = []
+    if isinstance(result, list):
+        for user in result:
+            # Check if user has student role
+            roles = user.get('roles', [])
+            is_student = any(role.get('shortname') == 'student' for role in roles)
+            
+            if is_student:
+                students.append({
+                    'id': str(user['id']),
+                    'name': f"{user.get('firstname', '')} {user.get('lastname', '')}".strip(),
+                    'email': user.get('email', ''),
+                    'username': user.get('username', ''),
+                    'profileimage': user.get('profileimageurl', '')
+                })
+    
+    print(f"Found {len(students)} students in course {course_id}")
+    return students
+
+def get_user_files(user_id, course_id=None):
+    """Get files accessible to a user"""
+    
+    files = []
+    
+    # Get user's private files
+    print(f"Fetching private files for user {user_id}")
+    private_files = moodle_api_call('core_files_get_files', {
+        'contextid': 1,  # User context
+        'component': 'user',
+        'filearea': 'private',
+        'itemid': 0,
+        'filepath': '/',
+        'userid': user_id
+    })
+    
+    # Check if API call failed
+    if isinstance(private_files, dict) and 'error' in private_files:
+        print(f"Private files API error: {private_files}")
+        return private_files  # Return the error
+    
+    if isinstance(private_files, list):
+        for file_info in private_files:
+            if file_info.get('filename') != '.' and not file_info.get('isdir', False):
+                files.append({
+                    'id': f"private_{file_info.get('contenthash', file_info.get('filename'))}",
+                    'name': file_info.get('filename', 'Unknown'),
+                    'size': file_info.get('filesize', 0),
+                    'url': file_info.get('fileurl', ''),
+                    'type': 'private',
+                    'mimetype': file_info.get('mimetype', ''),
+                    'timemodified': file_info.get('timemodified', 0)
+                })
+    else:
+        print(f"Unexpected private files response type: {type(private_files)}")
+    
+    # If course_id provided, also get course files the user can access
+    if course_id:
+        print(f"Fetching course files for course {course_id}")
+        # Get course context - try a different approach
+        course_files = moodle_api_call('core_files_get_files', {
+            'contextid': 1,  # We'll try with system context first
+            'component': 'course',
+            'filearea': 'summary',
+            'itemid': 0,
+            'filepath': '/',
+            'userid': user_id
+        })
+        
+        if isinstance(course_files, dict) and 'error' in course_files:
+            print(f"Course files API error: {course_files}")
+            # Don't return error for course files, just skip them
+        elif isinstance(course_files, list):
+            for file_info in course_files:
+                if file_info.get('filename') != '.' and not file_info.get('isdir', False):
+                    files.append({
+                        'id': f"course_{file_info.get('contenthash', file_info.get('filename'))}",
+                        'name': file_info.get('filename', 'Unknown'),
+                        'size': file_info.get('filesize', 0),
+                        'url': file_info.get('fileurl', ''),
+                        'type': 'course',
+                        'mimetype': file_info.get('mimetype', ''),
+                        'timemodified': file_info.get('timemodified', 0)
+                    })
+    
+    print(f"Found {len(files)} files for user {user_id}")
+    return files
+
+def get_learners_in_course(course_id):
+    """Get list of learners in course from Moodle API"""
+    if not course_id or not MOODLE_CONFIG['token']:
+        # Fallback to mock data if no API access
+        print("Using fallback mock data for learners")
+        return [
+            {'id': 'user123', 'name': 'John Doe', 'email': 'john@example.com', 'username': 'johndoe'},
+            {'id': 'user456', 'name': 'Jane Smith', 'email': 'jane@example.com', 'username': 'janesmith'},
+            {'id': 'user789', 'name': 'Bob Wilson', 'email': 'bob@example.com', 'username': 'bobwilson'}
+        ]
+    
+    return get_course_users(course_id)
+
+def download_moodle_file(file_url, moodle_token):
+    """Download a file from Moodle"""
+    try:
+        # Add token to URL if not already present
+        if 'token=' not in file_url:
+            separator = '&' if '?' in file_url else '?'
+            file_url = f"{file_url}{separator}token={moodle_token}"
+        
+        print(f"Downloading file from: {file_url[:100]}...")
+        response = requests.get(file_url, timeout=60)
+        response.raise_for_status()
+        print(f"Downloaded {len(response.content)} bytes")
+        return response.content
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Failed to download file from Moodle: {str(e)}")
+
+# Helper functions for file management
+def allowed_file(filename):
+    """Check if file extension is allowed"""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def save_file_metadata(file_info):
+    """Save file metadata (use database in production)"""
+    file_id = str(uuid.uuid4())
+    file_storage[file_id] = {
+        **file_info,
+        'id': file_id,
+        'uploaded_at': datetime.utcnow().isoformat()
+    }
+    return file_id
+
+def get_files_for_learner(learner_id, course_id):
+    """Get files uploaded for a specific learner"""
+    return [f for f in file_storage.values() 
+            if f.get('learner_id') == learner_id and f.get('course_id') == course_id]
+
+def get_all_files_in_course(course_id):
+    """Get all files in a course"""
+    return [f for f in file_storage.values() if f.get('course_id') == course_id]
+
+print("=== MOODLE API FUNCTIONS LOADED ===")
+
+# Update the file endpoint to use real Moodle API
+@app.route('/get_user_files/<user_id>')
+def get_user_files_endpoint(user_id):
+    """Get files for a specific user from Moodle - Real API Version"""
+    
+    print(f"=== GET_USER_FILES ENDPOINT CALLED ===")
+    print(f"User ID: {user_id}")
+    print(f"Course ID: {request.args.get('course_id')}")
+    print(f"Session keys: {list(session.keys())}")
+    
+    # Check if user has admin privileges
+    lti_data = session.get('lti_data')
+    if not lti_data:
+        print("No LTI data in session")
+        return jsonify({
+            'success': False, 
+            'error': 'Not authorized - no LTI session data',
+            'help': 'Try launching the tool from Moodle first',
+            'debug': {
+                'session_keys': list(session.keys()),
+                'has_lti_data': False
+            }
+        }), 403
+    
+    user_roles = lti_data.get('roles', [])
+    print(f"User roles: {user_roles}")
+    
+    if not is_admin_user(user_roles):
+        print("User is not admin")
+        return jsonify({
+            'success': False, 
+            'error': 'Admin privileges required',
+            'debug': {
+                'user_roles': user_roles,
+                'admin_check': False
+            }
+        }), 403
+    
+    course_id = request.args.get('course_id')
+    
+    # Check if API is configured
+    if not MOODLE_CONFIG['token']:
+        print("Moodle API not configured")
+        return jsonify({
+            'success': False,
+            'error': 'Moodle API not configured',
+            'help': 'Set MOODLE_API_TOKEN environment variable',
+            'debug': {
+                'token_configured': False
+            }
+        })
+    
+    try:
+        # Get real files from Moodle API
+        print(f"Getting real files for user {user_id} from Moodle")
+        files = get_user_files(user_id, course_id)
+        
+        # Check if files is an error response
+        if isinstance(files, dict) and 'error' in files:
+            return jsonify({
+                'success': False,
+                'error': files['error'],
+                'debug': files.get('debug', {}),
+                'help': 'Check Moodle API configuration and permissions'
+            })
+        
+        print(f"Successfully retrieved {len(files)} files from Moodle")
+        return jsonify({
+            'success': True,
+            'files': files,
+            'user_id': user_id,
+            'course_id': course_id,
+            'file_count': len(files),
+            'source': 'moodle_api',
+            'debug': {
+                'auth_passed': True,
+                'admin_user': True,
+                'api_configured': bool(MOODLE_CONFIG['token'])
+            }
+        })
+        
+    except Exception as e:
+        print(f"Exception in get_user_files_endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False, 
+            'error': f"Server error: {str(e)}",
+            'help': 'Check server logs for details'
+        }), 500
 
 # File management endpoints - adding back authentication
 @app.route('/get_user_files/<user_id>')
