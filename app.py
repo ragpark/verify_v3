@@ -50,9 +50,21 @@ print(f"API Token configured: {bool(MOODLE_CONFIG['token'])}")
 @app.route('/')
 def index():
     return jsonify({
-        'message': 'LTI Tool Server - Debugging Version',
+        'message': 'LTI Tool Server - Enhanced Debugging Version',
         'status': 'running',
         'timestamp': datetime.utcnow().isoformat(),
+        'moodle_configured': bool(MOODLE_CONFIG['token']),
+        'endpoints': {
+            'get_user_files': '/get_user_files/<user_id>',
+            'copy_files': '/copy_moodle_files',
+            'upload_files': '/upload_files', 
+            'download_file': '/download_file/<file_id>',
+            'delete_file': '/delete_file/<file_id>',
+            'lti_launch': '/launch',
+            'test_session': '/test_session',
+            'debug_routes': '/debug_routes'
+        },
+        'total_routes': len(list(app.url_map.iter_rules())),
         'routes': [str(rule) for rule in app.url_map.iter_rules()]
     })
 
@@ -73,26 +85,165 @@ def test_param(param_id):
         'timestamp': datetime.utcnow().isoformat()
     })
 
-# File endpoint - simplified
+# File management endpoints - adding back gradually
 @app.route('/get_user_files/<user_id>')
-def get_user_files_simple(user_id):
-    course_id = request.args.get('course_id', 'unknown')
+def get_user_files_endpoint(user_id):
+    """Get files for a specific user from Moodle - Enhanced Version"""
     
-    print(f"=== GET_USER_FILES CALLED ===")
+    print(f"=== GET_USER_FILES ENDPOINT CALLED ===")
     print(f"User ID: {user_id}")
-    print(f"Course ID: {course_id}")
-    print(f"Request URL: {request.url}")
+    print(f"Course ID: {request.args.get('course_id')}")
+    print(f"Session keys: {list(session.keys())}")
     print(f"Request method: {request.method}")
-    print(f"Request args: {dict(request.args)}")
+    print(f"Request URL: {request.url}")
     
-    # Return simple response for now
+    course_id = request.args.get('course_id')
+    
+    # Check if we have session data (without failing if we don't)
+    lti_data = session.get('lti_data')
+    if lti_data:
+        print(f"LTI data found in session")
+        user_roles = lti_data.get('roles', [])
+        print(f"User roles: {user_roles}")
+    else:
+        print("No LTI data in session - continuing anyway for testing")
+    
+    # For now, return mock data
+    mock_files = [
+        {
+            'id': 'file_1',
+            'name': 'sample_document.pdf',
+            'size': 1024000,
+            'type': 'private',
+            'mimetype': 'application/pdf'
+        },
+        {
+            'id': 'file_2', 
+            'name': 'course_image.jpg',
+            'size': 512000,
+            'type': 'course',
+            'mimetype': 'image/jpeg'
+        }
+    ]
+    
     return jsonify({
         'success': True,
-        'message': 'File endpoint reached successfully!',
+        'files': mock_files,
         'user_id': user_id,
         'course_id': course_id,
-        'timestamp': datetime.utcnow().isoformat(),
+        'file_count': len(mock_files),
+        'session_available': lti_data is not None,
         'moodle_configured': bool(MOODLE_CONFIG['token'])
+    })
+
+# Add more file endpoints
+@app.route('/copy_moodle_files', methods=['POST'])
+def copy_moodle_files():
+    """Copy selected files from Moodle - Mock Version"""
+    
+    print("=== COPY_MOODLE_FILES ENDPOINT CALLED ===")
+    
+    try:
+        data = request.json or {}
+        print(f"Request data: {data}")
+        
+        return jsonify({
+            'success': True,
+            'copied_count': len(data.get('file_ids', [])),
+            'message': 'Mock copy operation completed'
+        })
+        
+    except Exception as e:
+        print(f"Error in copy_moodle_files: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/upload_files', methods=['POST'])
+def upload_files():
+    """Handle file uploads - Mock Version"""
+    
+    print("=== UPLOAD_FILES ENDPOINT CALLED ===")
+    
+    try:
+        # Check form data
+        learner_id = request.form.get('learner_id')
+        course_id = request.form.get('course_id')
+        files = request.files.getlist('files')
+        
+        print(f"Upload request: learner={learner_id}, course={course_id}, files={len(files)}")
+        
+        return jsonify({
+            'success': True,
+            'uploaded_count': len(files),
+            'message': 'Mock upload operation completed'
+        })
+        
+    except Exception as e:
+        print(f"Error in upload_files: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/download_file/<file_id>')
+def download_file(file_id):
+    """Download a file - Mock Version"""
+    
+    print(f"=== DOWNLOAD_FILE ENDPOINT CALLED: {file_id} ===")
+    
+    return jsonify({
+        'message': f'Mock download for file {file_id}',
+        'file_id': file_id
+    })
+
+@app.route('/delete_file/<file_id>', methods=['DELETE'])
+def delete_file(file_id):
+    """Delete a file - Mock Version"""
+    
+    print(f"=== DELETE_FILE ENDPOINT CALLED: {file_id} ===")
+    
+    return jsonify({
+        'success': True,
+        'message': f'Mock delete for file {file_id}',
+        'file_id': file_id
+    })
+
+# Simple LTI launch for testing
+@app.route('/launch', methods=['POST'])
+def lti_launch_simple():
+    """Simple LTI launch for testing"""
+    
+    print("=== LTI LAUNCH CALLED ===")
+    
+    # Store some mock LTI data in session
+    session['lti_data'] = {
+        'user_id': 'test_user',
+        'user_name': 'Test User',
+        'course_id': '2',
+        'course_title': 'Test Course',
+        'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor']
+    }
+    
+    return jsonify({
+        'success': True,
+        'message': 'Mock LTI launch completed',
+        'lti_data': session['lti_data']
+    })
+
+# Test session endpoint
+@app.route('/test_session')
+def test_session():
+    """Test session storage"""
+    
+    # Set some test data
+    session['test_key'] = 'test_value'
+    session['timestamp'] = datetime.utcnow().isoformat()
+    
+    return jsonify({
+        'session_data': dict(session),
+        'session_id': session.get('_id', 'no_id')
     })
 
 # Moodle API test
