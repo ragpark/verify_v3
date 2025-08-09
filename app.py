@@ -3,13 +3,26 @@ import json
 import jwt
 import requests
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template_string, redirect, session
+from flask import Flask, request, jsonify, render_template_string, redirect, session, flash, url_for
+from werkzeug.utils import secure_filename
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 import uuid
+import mimetypes
 
 # Simple in-memory cache for state/nonce as fallback (not for production scale)
 state_cache = {}
+
+# File storage configuration
+UPLOAD_FOLDER = '/tmp/lti_files'  # Railway.app temp storage
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'}
+MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB
+
+# Create upload directory if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# In-memory storage for file metadata (use database in production)
+file_storage = {}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
@@ -19,7 +32,9 @@ app.config.update(
     SESSION_COOKIE_SECURE=True,  # Require HTTPS
     SESSION_COOKIE_HTTPONLY=True,  # Prevent XSS
     SESSION_COOKIE_SAMESITE='None',  # Allow cross-origin (needed for LTI)
-    PERMANENT_SESSION_LIFETIME=timedelta(minutes=60)
+    PERMANENT_SESSION_LIFETIME=timedelta(minutes=60),
+    UPLOAD_FOLDER=UPLOAD_FOLDER,
+    MAX_CONTENT_LENGTH=MAX_FILE_SIZE
 )
 
 # LTI 1.3 Configuration
@@ -53,8 +68,52 @@ def generate_key_pair():
     
     return private_pem, public_pem
 
-# Helper function to fix PEM format
-def fix_pem_format(pem_string, key_type='PRIVATE'):
+# Helper functions
+def allowed_file(filename):
+    """Check if file extension is allowed"""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def is_admin_user(roles):
+    """Check if user has admin/instructor privileges"""
+    admin_roles = [
+        'http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor',
+        'http://purl.imsglobal.org/vocab/lis/v2/membership#ContentDeveloper',
+        'http://purl.imsglobal.org/vocab/lis/v2/system/person#Administrator',
+        'Instructor',
+        'Teacher',
+        'Admin'
+    ]
+    return any(role in admin_roles for role in (roles or []))
+
+def get_learners_in_course(course_id):
+    """Get list of learners in course (mock data - integrate with your system)"""
+    # This would typically query your LMS or database
+    # For demo purposes, return mock data
+    return [
+        {'id': 'user123', 'name': 'John Doe', 'email': 'john@example.com'},
+        {'id': 'user456', 'name': 'Jane Smith', 'email': 'jane@example.com'},
+        {'id': 'user789', 'name': 'Bob Wilson', 'email': 'bob@example.com'}
+    ]
+
+def save_file_metadata(file_info):
+    """Save file metadata (use database in production)"""
+    file_id = str(uuid.uuid4())
+    file_storage[file_id] = {
+        **file_info,
+        'id': file_id,
+        'uploaded_at': datetime.utcnow().isoformat()
+    }
+    return file_id
+
+def get_files_for_learner(learner_id, course_id):
+    """Get files uploaded for a specific learner"""
+    return [f for f in file_storage.values() 
+            if f.get('learner_id') == learner_id and f.get('course_id') == course_id]
+
+def get_all_files_in_course(course_id):
+    """Get all files in a course"""
+    return [f for f in file_storage.values() if f.get('course_id') == course_id]
     """Fix PEM format by ensuring proper line breaks"""
     if not pem_string:
         return None
@@ -346,7 +405,7 @@ def lti_launch():
             'resource_link_id': payload.get('https://purl.imsglobal.org/spec/lti/claim/resource_link', {}).get('id'),
         }
         
-        # Store LTI data in session
+        # Store LTI data in session for file management
         session['lti_data'] = lti_data
         
         # Render the tool interface
@@ -356,13 +415,378 @@ def lti_launch():
         return jsonify({'error': f'Token validation failed: {str(e)}'}), 400
 
 def render_tool_interface(lti_data):
-    """Render the main tool interface"""
+    """Render the main tool interface based on user role"""
+    
+    user_roles = lti_data.get('roles', [])
+    is_admin = is_admin_user(user_roles)
+    course_id = lti_data.get('course_id')
+    user_id = lti_data.get('user_id')
+    
+    if is_admin:
+        return render_admin_interface(lti_data)
+    else:
+        return render_student_interface(lti_data)
+
+def render_admin_interface(lti_data):
+    """Render admin/instructor interface with file management"""
+    
+    course_id = lti_data.get('course_id')
+    learners = get_learners_in_course(course_id)
+    all_files = get_all_files_in_course(course_id)
     
     html_template = """
     <!DOCTYPE html>
     <html>
     <head>
-        <title>LTI 1.3 Hello World Tool</title>
+        <title>LTI File Manager - Admin</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                background-color: white;
+                padding: 30px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                margin-bottom: 20px;
+            }
+            .header {
+                text-align: center;
+                color: #333;
+                border-bottom: 2px solid #2196F3;
+                padding-bottom: 20px;
+                margin-bottom: 30px;
+            }
+            .admin-badge {
+                background-color: #2196F3;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 20px;
+                font-size: 14px;
+                margin: 10px 0;
+            }
+            .section {
+                margin: 30px 0;
+                padding: 20px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+            }
+            .section h3 {
+                color: #333;
+                margin-top: 0;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 10px;
+            }
+            .learner-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 15px;
+                margin: 20px 0;
+            }
+            .learner-card {
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 15px;
+                background-color: #f9f9f9;
+                cursor: pointer;
+                transition: background-color 0.2s;
+            }
+            .learner-card:hover {
+                background-color: #e3f2fd;
+            }
+            .learner-card.selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            .upload-area {
+                border: 2px dashed #ddd;
+                border-radius: 8px;
+                padding: 40px;
+                text-align: center;
+                margin: 20px 0;
+                transition: border-color 0.2s;
+            }
+            .upload-area.dragover {
+                border-color: #2196F3;
+                background-color: #e3f2fd;
+            }
+            .file-input {
+                margin: 20px 0;
+            }
+            .button {
+                background-color: #2196F3;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 16px;
+                margin: 5px;
+            }
+            .button:hover {
+                background-color: #1976D2;
+            }
+            .button:disabled {
+                background-color: #ccc;
+                cursor: not-allowed;
+            }
+            .files-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+            }
+            .files-table th,
+            .files-table td {
+                border: 1px solid #ddd;
+                padding: 12px;
+                text-align: left;
+            }
+            .files-table th {
+                background-color: #f5f5f5;
+            }
+            .alert {
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 4px;
+            }
+            .alert-success {
+                background-color: #d4edda;
+                color: #155724;
+                border: 1px solid #c3e6cb;
+            }
+            .alert-error {
+                background-color: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }
+            .hidden {
+                display: none;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📁 LTI File Manager</h1>
+                <div class="admin-badge">Administrator</div>
+                <p>Manage learner files for {{ lti_data.course_title or 'this course' }}</p>
+            </div>
+            
+            <div class="section">
+                <h3>👤 Select Learner</h3>
+                <div class="learner-grid" id="learnerGrid">
+                    {% for learner in learners %}
+                    <div class="learner-card" onclick="selectLearner('{{ learner.id }}', '{{ learner.name }}')" id="learner-{{ learner.id }}">
+                        <strong>{{ learner.name }}</strong><br>
+                        <small>{{ learner.email }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            
+            <div class="section" id="uploadSection" style="display: none;">
+                <h3>📤 Upload Files for <span id="selectedLearnerName"></span></h3>
+                
+                <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+                    <p>Click here or drag files to upload</p>
+                    <p><small>Allowed: PDF, Images, Documents (max 16MB each)</small></p>
+                </div>
+                
+                <form id="uploadForm" class="hidden">
+                    <input type="file" id="fileInput" name="files" multiple accept=".pdf,.jpg,.jpeg,.png,.gif,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt">
+                    <input type="hidden" id="selectedLearnerId" name="learner_id">
+                </form>
+                
+                <button type="button" id="uploadButton" class="button" disabled onclick="uploadFiles()">
+                    Upload Selected Files
+                </button>
+            </div>
+            
+            <div class="section">
+                <h3>📋 All Files in Course</h3>
+                <table class="files-table">
+                    <thead>
+                        <tr>
+                            <th>File Name</th>
+                            <th>Learner</th>
+                            <th>Size</th>
+                            <th>Uploaded</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for file in all_files %}
+                        <tr>
+                            <td>{{ file.original_name }}</td>
+                            <td>{{ file.learner_name }}</td>
+                            <td>{{ "%.1f KB"|format(file.size / 1024) }}</td>
+                            <td>{{ file.uploaded_at[:19] }}</td>
+                            <td>
+                                <button class="button" onclick="downloadFile('{{ file.id }}')">Download</button>
+                                <button class="button" onclick="deleteFile('{{ file.id }}')" style="background-color: #f44336;">Delete</button>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" style="text-align: center;">No files uploaded yet</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div id="alerts"></div>
+        
+        <script>
+            let selectedLearner = null;
+            let selectedFiles = [];
+            
+            function selectLearner(learnerId, learnerName) {
+                // Update UI
+                document.querySelectorAll('.learner-card').forEach(card => {
+                    card.classList.remove('selected');
+                });
+                document.getElementById('learner-' + learnerId).classList.add('selected');
+                
+                // Show upload section
+                document.getElementById('uploadSection').style.display = 'block';
+                document.getElementById('selectedLearnerName').textContent = learnerName;
+                document.getElementById('selectedLearnerId').value = learnerId;
+                
+                selectedLearner = {id: learnerId, name: learnerName};
+            }
+            
+            function showAlert(message, type = 'success') {
+                const alertsDiv = document.getElementById('alerts');
+                const alert = document.createElement('div');
+                alert.className = `alert alert-${type}`;
+                alert.textContent = message;
+                alertsDiv.appendChild(alert);
+                
+                setTimeout(() => {
+                    alert.remove();
+                }, 5000);
+            }
+            
+            // File drag and drop
+            const uploadArea = document.getElementById('uploadArea');
+            const fileInput = document.getElementById('fileInput');
+            
+            uploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadArea.classList.add('dragover');
+            });
+            
+            uploadArea.addEventListener('dragleave', () => {
+                uploadArea.classList.remove('dragover');
+            });
+            
+            uploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadArea.classList.remove('dragover');
+                fileInput.files = e.dataTransfer.files;
+                updateFileSelection();
+            });
+            
+            fileInput.addEventListener('change', updateFileSelection);
+            
+            function updateFileSelection() {
+                const files = fileInput.files;
+                const uploadButton = document.getElementById('uploadButton');
+                
+                if (files.length > 0) {
+                    uploadButton.disabled = false;
+                    uploadButton.textContent = `Upload ${files.length} file(s)`;
+                } else {
+                    uploadButton.disabled = true;
+                    uploadButton.textContent = 'Upload Selected Files';
+                }
+            }
+            
+            function uploadFiles() {
+                if (!selectedLearner || !fileInput.files.length) {
+                    showAlert('Please select a learner and files to upload', 'error');
+                    return;
+                }
+                
+                const formData = new FormData();
+                formData.append('learner_id', selectedLearner.id);
+                formData.append('learner_name', selectedLearner.name);
+                formData.append('course_id', '{{ lti_data.course_id }}');
+                
+                for (let file of fileInput.files) {
+                    formData.append('files', file);
+                }
+                
+                fetch('/upload_files', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showAlert(`Successfully uploaded ${data.uploaded_count} file(s)!`);
+                        // Reset form
+                        fileInput.value = '';
+                        updateFileSelection();
+                        // Reload page to show new files
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showAlert(data.error || 'Upload failed', 'error');
+                    }
+                })
+                .catch(error => {
+                    showAlert('Upload failed: ' + error.message, 'error');
+                });
+            }
+            
+            function downloadFile(fileId) {
+                window.open('/download_file/' + fileId, '_blank');
+            }
+            
+            function deleteFile(fileId) {
+                if (confirm('Are you sure you want to delete this file?')) {
+                    fetch('/delete_file/' + fileId, {method: 'DELETE'})
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            showAlert('File deleted successfully!');
+                            location.reload();
+                        } else {
+                            showAlert(data.error || 'Delete failed', 'error');
+                        }
+                    })
+                    .catch(error => {
+                        showAlert('Delete failed: ' + error.message, 'error');
+                    });
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """
+    
+    return render_template_string(html_template, lti_data=lti_data, learners=learners, all_files=all_files)
+
+def render_student_interface(lti_data):
+    """Render student interface showing their files"""
+    
+    course_id = lti_data.get('course_id')
+    user_id = lti_data.get('user_id')
+    user_files = get_files_for_learner(user_id, course_id)
+    
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LTI File Manager - Student</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
@@ -392,30 +816,29 @@ def render_tool_interface(lti_data):
                 background-color: #f9f9f9;
                 border-left: 4px solid #4CAF50;
             }
-            .info-label {
-                font-weight: bold;
-                color: #555;
-                margin-bottom: 5px;
-            }
-            .info-value {
-                color: #333;
-                margin-bottom: 10px;
-            }
-            .success {
-                color: #4CAF50;
-                text-align: center;
-                font-size: 18px;
+            .files-table {
+                width: 100%;
+                border-collapse: collapse;
                 margin: 20px 0;
+            }
+            .files-table th,
+            .files-table td {
+                border: 1px solid #ddd;
+                padding: 12px;
+                text-align: left;
+            }
+            .files-table th {
+                background-color: #f5f5f5;
             }
             .button {
                 background-color: #4CAF50;
                 color: white;
-                padding: 10px 20px;
+                padding: 8px 16px;
                 border: none;
                 border-radius: 4px;
                 cursor: pointer;
-                font-size: 16px;
-                margin: 10px 5px;
+                font-size: 14px;
+                margin: 5px;
             }
             .button:hover {
                 background-color: #45a049;
@@ -425,60 +848,52 @@ def render_tool_interface(lti_data):
     <body>
         <div class="container">
             <div class="header">
-                <h1>🎉 LTI 1.3 Tool Successfully Launched!</h1>
-                <p>Hello World from Railway.app</p>
-            </div>
-            
-            <div class="success">
-                ✅ LTI 1.3 integration is working correctly!
+                <h1>📁 My Files</h1>
+                <p>Hello {{ lti_data.user_name or "Student" }}!</p>
             </div>
             
             <div class="info-section">
-                <div class="info-label">User Information:</div>
-                <div class="info-value">User ID: {{ lti_data.user_id }}</div>
-                <div class="info-value">Name: {{ lti_data.user_name or 'Not provided' }}</div>
-                <div class="info-value">Email: {{ lti_data.user_email or 'Not provided' }}</div>
+                <h3>Your Uploaded Files</h3>
+                {% if user_files %}
+                    <table class="files-table">
+                        <thead>
+                            <tr>
+                                <th>File Name</th>
+                                <th>Size</th>
+                                <th>Uploaded</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for file in user_files %}
+                            <tr>
+                                <td>{{ file.original_name }}</td>
+                                <td>{{ "%.1f KB"|format(file.size / 1024) }}</td>
+                                <td>{{ file.uploaded_at[:19] }}</td>
+                                <td>
+                                    <button class="button" onclick="downloadFile('{{ file.id }}')">Download</button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p>No files have been uploaded for you yet.</p>
+                    <p>Your instructor can upload files to your account from their admin interface.</p>
+                {% endif %}
             </div>
-            
-            <div class="info-section">
-                <div class="info-label">Course Information:</div>
-                <div class="info-value">Course ID: {{ lti_data.course_id or 'Not provided' }}</div>
-                <div class="info-value">Course Title: {{ lti_data.course_title or 'Not provided' }}</div>
-                <div class="info-value">Resource Link ID: {{ lti_data.resource_link_id or 'Not provided' }}</div>
-            </div>
-            
-            <div class="info-section">
-                <div class="info-label">User Roles:</div>
-                <div class="info-value">
-                    {% if lti_data.roles %}
-                        {% for role in lti_data.roles %}
-                            {{ role }}<br>
-                        {% endfor %}
-                    {% else %}
-                        No roles provided
-                    {% endif %}
-                </div>
-            </div>
-            
-            <div style="text-align: center; margin-top: 30px;">
-                <button class="button" onclick="showMessage()">Test Interaction</button>
-                <button class="button" onclick="window.location.reload()">Refresh</button>
-            </div>
-            
-            <div id="message" style="margin-top: 20px; text-align: center;"></div>
         </div>
         
         <script>
-            function showMessage() {
-                document.getElementById('message').innerHTML = 
-                    '<div class="success">Hello {{ lti_data.user_name or "User" }}! This is your personalized LTI tool.</div>';
+            function downloadFile(fileId) {
+                window.open('/download_file/' + fileId, '_blank');
             }
         </script>
     </body>
     </html>
     """
     
-    return render_template_string(html_template, lti_data=lti_data)
+    return render_template_string(html_template, lti_data=lti_data, user_files=user_files)
 
 # Public key endpoint for Moodle to verify our JWTs
 @app.route('/.well-known/jwks.json')
