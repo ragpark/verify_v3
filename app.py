@@ -1284,11 +1284,6 @@ def lti_config():
     
     return jsonify(config)
 
-# Health check endpoint
-@app.route('/health')
-def health_check():
-    return jsonify({'status': 'healthy', 'timestamp': datetime.utcnow().isoformat()})
-
 # Root endpoint
 @app.route('/')
 def index():
@@ -1311,6 +1306,14 @@ def index():
             'health': '/health'
         },
         'available_routes': [str(rule) for rule in app.url_map.iter_rules()]
+    })
+
+# Simple test endpoint to verify routing works
+@app.route('/test_route')
+def test_route():
+    return jsonify({
+        'message': 'Route test successful',
+        'timestamp': datetime.utcnow().isoformat()
     })
 
 # Health check endpoint
