@@ -1335,11 +1335,12 @@ def render_student_interface(lti_data):
     return render_template_string(html_template, lti_data=lti_data, user_files=user_files)
 
 # Simple LTI launch for testing - enhanced to render the full interface
-@app.route('/launch', methods=['POST'])
+@app.route('/launch', methods=['GET', 'POST'])
 def lti_launch_simple():
     """Simple LTI launch that renders the full interface"""
     
     print("=== LTI LAUNCH CALLED ===")
+    print(f"Request method: {request.method}")
     
     # Store mock LTI data in session
     session['lti_data'] = {
@@ -1349,6 +1350,27 @@ def lti_launch_simple():
         'course_id': '2',
         'course_title': 'Test Course',
         'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor'],
+        'resource_link_id': 'test_link'
+    }
+    
+    # Render the appropriate interface based on role
+    return render_tool_interface(session['lti_data'])
+
+# Add a separate student launch for testing
+@app.route('/launch_student', methods=['GET', 'POST'])
+def lti_launch_student():
+    """Test student interface"""
+    
+    print("=== STUDENT LTI LAUNCH CALLED ===")
+    
+    # Store mock student LTI data in session
+    session['lti_data'] = {
+        'user_id': 'test_student',
+        'user_name': 'Test Student',
+        'user_email': 'student@test.com',
+        'course_id': '2', 
+        'course_title': 'Test Course',
+        'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner'],
         'resource_link_id': 'test_link'
     }
     
