@@ -268,9 +268,11 @@ def index():
         'endpoints': {
             'get_user_files': '/get_user_files/<user_id>',
             'copy_files': '/copy_moodle_files',
-            'upload_files': '/upload_files', 
+            'upload_files': '/upload_files',
             'download_file': '/download_file/<file_id>',
             'delete_file': '/delete_file/<file_id>',
+            'list_uploaded_files': '/list_uploaded_files',
+            'files_ui': '/files',
             'lti_launch': '/launch',
             'test_session': '/test_session',
             'debug_routes': '/debug_routes'
@@ -830,6 +832,73 @@ def delete_file(file_id):
         'message': f'Mock delete for file {file_id}',
         'file_id': file_id
     })
+
+@app.route('/list_uploaded_files')
+def list_uploaded_files():
+    """Return a JSON list of files stored in the upload folder"""
+    try:
+        files = []
+        for name in sorted(os.listdir(UPLOAD_FOLDER)):
+            path = os.path.join(UPLOAD_FOLDER, name)
+            if os.path.isfile(path):
+                stat = os.stat(path)
+                files.append({
+                    'name': name,
+                    'size': stat.st_size,
+                    'uploaded_at': datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+        return jsonify({'files': files, 'count': len(files)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/files')
+def files_ui():
+    """Render a simple HTML page listing uploaded files"""
+    files = []
+    for name in sorted(os.listdir(UPLOAD_FOLDER)):
+        path = os.path.join(UPLOAD_FOLDER, name)
+        if os.path.isfile(path):
+            stat = os.stat(path)
+            files.append({
+                'name': name,
+                'size': stat.st_size,
+                'uploaded_at': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Uploaded Files</title>
+        <meta charset="utf-8">
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            table { border-collapse: collapse; width: 100%; }
+            th, td { border: 1px solid #ddd; padding: 8px; }
+            th { background-color: #f2f2f2; }
+        </style>
+    </head>
+    <body>
+        <h1>Uploaded Files</h1>
+        {% if files %}
+        <table>
+            <tr><th>Filename</th><th>Size (bytes)</th><th>Uploaded</th></tr>
+            {% for file in files %}
+            <tr>
+                <td>{{ file.name }}</td>
+                <td>{{ file.size }}</td>
+                <td>{{ file.uploaded_at }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No files uploaded.</p>
+        {% endif %}
+    </body>
+    </html>
+    """
+
+    return render_template_string(html_template, files=files)
 
 # Complete LTI interface components
 def render_tool_interface(lti_data):
