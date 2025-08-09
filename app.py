@@ -461,6 +461,18 @@ def download_moodle_file(file_url, moodle_token):
         raise Exception(f"Failed to download file from Moodle: {str(e)}")
 
 # Helper functions for file management
+def is_admin_user(roles):
+    """Check if user has admin/instructor privileges"""
+    admin_roles = [
+        'http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor',
+        'http://purl.imsglobal.org/vocab/lis/v2/membership#ContentDeveloper',
+        'http://purl.imsglobal.org/vocab/lis/v2/system/person#Administrator',
+        'Instructor',
+        'Teacher',
+        'Admin'
+    ]
+    return any(role in admin_roles for role in (roles or []))
+
 def allowed_file(filename):
     """Check if file extension is allowed"""
     return '.' in filename and \
