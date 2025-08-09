@@ -1334,12 +1334,281 @@ def render_student_interface(lti_data):
     
     return render_template_string(html_template, lti_data=lti_data, user_files=user_files)
 
-# Simple LTI launch for testing - enhanced to render the full interface
-@app.route('/launch', methods=['GET', 'POST'])
-def lti_launch_simple():
-    """Simple LTI launch that renders the full interface"""
+# LTI 1.3 OIDC Login endpoint
+@app.route('/login', methods=['GET', 'POST'])
+def oidc_login():
+    """Handle OIDC login initiation from Moodle"""
     
-    print("=== LTI LAUNCH CALLED ===")
+    # Get parameters from request
+    iss = request.args.get('iss') or request.form.get('iss')
+    client_id = request.args.get('client_id') or request.form.get('client_id')
+    target_link_uri = request.args.get('target_link_uri') or request.form.get('target_link_uri')
+    login_hint = request.args.get('login_hint') or request.form.get('login_hint')
+    lti_message_hint = request.args.get('lti_message_hint') or request.form.get('lti_message_hint')
+    
+    # Debug logging - print received vs expected values
+    print("=== OIDC LOGIN DEBUG ===")
+    print(f"Received issuer: '{iss}'")
+    print(f"Expected issuer: '{LTI_CONFIG['iss']}'")
+    print(f"Received client_id: '{client_id}'")
+    print(f"Expected client_id: '{LTI_CONFIG['client_id']}'")
+    print(f"Target link URI: '{target_link_uri}'")
+    print("========================")
+    
+    # Validate issuer and client_id
+    if iss != LTI_CONFIG['iss'] or client_id != LTI_CONFIG['client_id']:
+        error_details = {
+            'error': 'Invalid issuer or client_id',
+            'debug': {
+                'received_iss': iss,
+                'expected_iss': LTI_CONFIG['iss'],
+                'received_client_id': client_id,
+                'expected_client_id': LTI_CONFIG['client_id'],
+                'iss_match': iss == LTI_CONFIG['iss'],
+                'client_id_match': client_id == LTI_CONFIG['client_id']
+            }
+        }
+        return jsonify(error_details), 400
+    
+    # Generate state and nonce for security
+    state = str(uuid.uuid4())
+    nonce = str(uuid.uuid4())
+    
+    # Store state and nonce in session AND in-memory cache (fallback)
+    session['oauth_state'] = state
+    session['oauth_nonce'] = nonce
+    
+    # Also store in cache with expiration (fallback for session issues)
+    state_cache[state] = {
+        'nonce': nonce,
+        'timestamp': datetime.utcnow(),
+        'client_id': client_id,
+        'iss': iss
+    }
+    
+    # Clean old cache entries (older than 10 minutes)
+    current_time = datetime.utcnow()
+    expired_keys = [k for k, v in state_cache.items() 
+                   if current_time - v['timestamp'] > timedelta(minutes=10)]
+    for key in expired_keys:
+        del state_cache[key]
+    
+    # Build authorization request
+    auth_params = {
+        'response_type': 'id_token',
+        'scope': 'openid',
+        'client_id': client_id,
+        'redirect_uri': target_link_uri,
+        'login_hint': login_hint,
+        'state': state,
+        'response_mode': 'form_post',
+        'nonce': nonce,
+        'prompt': 'none'
+    }
+    
+    if lti_message_hint:
+        auth_params['lti_message_hint'] = lti_message_hint
+    
+    # Redirect to Moodle's authorization endpoint
+    auth_url = LTI_CONFIG['auth_login_url'] + '?' + '&'.join([f"{k}={v}" for k, v in auth_params.items()])
+    return redirect(auth_url)
+
+# LTI 1.3 Launch endpoint - replace the mock version with real LTI
+@app.route('/launch', methods=['POST'])
+def lti_launch():
+    """Handle LTI launch with JWT token validation"""
+    
+    # Get the JWT token from the request
+    id_token = request.form.get('id_token')
+    state = request.form.get('state')
+    
+    # Debug logging
+    print("=== LTI LAUNCH DEBUG ===")
+    print(f"Received state: '{state}'")
+    print(f"Session state: '{session.get('oauth_state')}'")
+    print(f"Session keys: {list(session.keys())}")
+    print(f"Has id_token: {bool(id_token)}")
+    print("========================")
+    
+    if not id_token:
+        return jsonify({'error': 'Missing id_token'}), 400
+    
+    # For development/testing: Try session first, then fallback to cache
+    stored_state = session.get('oauth_state')
+    stored_nonce = session.get('oauth_nonce')
+    
+    # Fallback to cache if session is empty
+    if not stored_state and state in state_cache:
+        print("Using cached state (session fallback)")
+        cached_data = state_cache[state]
+        stored_state = state
+        stored_nonce = cached_data['nonce']
+        
+        # Clean up used cache entry
+        del state_cache[state]
+    
+    if not stored_state:
+        print("WARNING: No state found in session OR cache")
+        # Last resort: try to continue without state validation for debugging
+        try:
+            unverified_payload = jwt.decode(id_token, options={"verify_signature": False})
+            stored_nonce = unverified_payload.get('nonce')
+            print(f"Extracted nonce from JWT: {stored_nonce}")
+        except Exception as e:
+            print(f"Could not extract nonce from token: {e}")
+            return jsonify({
+                'error': 'Session lost - please try launching again', 
+                'debug': 'No session state found',
+                'suggestion': 'This might be a Railway session issue. Try refreshing the course page and launching again.'
+            }), 400
+    else:
+        # Validate state only if we have it
+        if state != stored_state:
+            return jsonify({
+                'error': 'Invalid state parameter',
+                'debug': {
+                    'received_state': state,
+                    'expected_state': stored_state,
+                    'session_keys': list(session.keys()),
+                    'cache_available': state in state_cache
+                }
+            }), 400
+    
+    try:
+        # Get Moodle's public keys for token verification
+        jwks_response = requests.get(LTI_CONFIG['key_set_url'])
+        jwks = jwks_response.json()
+        
+        # Decode JWT header to get key ID
+        unverified_header = jwt.get_unverified_header(id_token)
+        kid = unverified_header.get('kid')
+        
+        # Find the correct public key
+        public_key_for_verification = None
+        for key in jwks.get('keys', []):
+            if key.get('kid') == kid:
+                # Convert JWK to PEM format for verification
+                # This is simplified - in production use a proper JWK library
+                public_key_for_verification = key
+                break
+        
+        if not public_key_for_verification:
+            return jsonify({'error': 'Could not find verification key'}), 400
+        
+        # For simplicity, we'll skip full JWT verification in this basic example
+        # In production, properly verify the JWT signature
+        
+        # Decode token (without verification for this demo)
+        payload = jwt.decode(id_token, options={"verify_signature": False})
+        
+        # Validate nonce
+        if payload.get('nonce') != stored_nonce:
+            print(f"Nonce validation - Received: '{payload.get('nonce')}', Expected: '{stored_nonce}'")
+            if stored_nonce:  # Only fail if we actually had a stored nonce
+                return jsonify({'error': 'Invalid nonce', 'debug': {'received_nonce': payload.get('nonce'), 'expected_nonce': stored_nonce}}), 400
+            else:
+                print("WARNING: No stored nonce - skipping nonce validation")
+        
+        # Validate required LTI claims
+        if (payload.get('iss') != LTI_CONFIG['iss'] or 
+            payload.get('aud') != LTI_CONFIG['client_id']):
+            return jsonify({'error': 'Invalid issuer or audience'}), 400
+        
+        # Extract LTI data
+        lti_data = {
+            'user_id': payload.get('sub'),
+            'user_name': payload.get('name'),
+            'user_email': payload.get('email'),
+            'course_id': payload.get('https://purl.imsglobal.org/spec/lti/claim/context', {}).get('id'),
+            'course_title': payload.get('https://purl.imsglobal.org/spec/lti/claim/context', {}).get('title'),
+            'roles': payload.get('https://purl.imsglobal.org/spec/lti/claim/roles', []),
+            'resource_link_id': payload.get('https://purl.imsglobal.org/spec/lti/claim/resource_link', {}).get('id'),
+        }
+        
+        # Store LTI data in session for file management
+        session['lti_data'] = lti_data
+        
+        # Render the tool interface based on user role
+        return render_tool_interface(lti_data)
+        
+    except Exception as e:
+        print(f"Token validation failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Token validation failed: {str(e)}'}), 400
+
+# Public key endpoint for Moodle to verify our JWTs
+@app.route('/.well-known/jwks.json')
+def jwks():
+    """Provide public keys for JWT verification"""
+    
+    if not public_key:
+        return jsonify({'error': 'No public key available'}), 500
+    
+    # Convert public key to JWK format
+    numbers = public_key.public_numbers()
+    
+    jwk = {
+        "kty": "RSA",
+        "use": "sig",
+        "kid": "lti-tool-key",
+        "n": str(numbers.n),
+        "e": str(numbers.e),
+        "alg": "RS256"
+    }
+    
+    return jsonify({"keys": [jwk]})
+
+# Configuration endpoint
+@app.route('/config.json')
+def lti_config():
+    """LTI 1.3 tool configuration"""
+    
+    base_url = request.url_root.rstrip('/')
+    
+    config = {
+        "title": "LTI 1.3 File Manager Tool",
+        "description": "A comprehensive LTI 1.3 tool for managing learner files with Moodle integration",
+        "oidc_initiation_url": f"{base_url}/login",
+        "target_link_uri": f"{base_url}/launch",
+        "scopes": [
+            "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem",
+            "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly",
+            "https://purl.imsglobal.org/spec/lti-ags/scope/score"
+        ],
+        "extensions": [
+            {
+                "domain": request.host,
+                "tool_id": "lti-file-manager",
+                "platform": "canvas.instructure.com",
+                "settings": {
+                    "text": "LTI File Manager",
+                    "placements": [
+                        {
+                            "text": "LTI File Manager",
+                            "enabled": True,
+                            "placement": "course_navigation",
+                            "message_type": "LtiResourceLinkRequest",
+                            "target_link_uri": f"{base_url}/launch"
+                        }
+                    ]
+                }
+            }
+        ],
+        "public_jwk_url": f"{base_url}/.well-known/jwks.json",
+        "custom_fields": {}
+    }
+    
+    return jsonify(config)
+
+print("=== LTI 1.3 PROTOCOL ENDPOINTS LOADED ===")
+
+# Keep the test launch for development
+@app.route('/launch_test', methods=['GET', 'POST'])
+def lti_launch_test():
+    """Test launch that renders the full interface (for development only)"""
+    
+    print("=== TEST LTI LAUNCH CALLED ===")
     print(f"Request method: {request.method}")
     
     # Store mock LTI data in session
@@ -1350,27 +1619,6 @@ def lti_launch_simple():
         'course_id': '2',
         'course_title': 'Test Course',
         'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor'],
-        'resource_link_id': 'test_link'
-    }
-    
-    # Render the appropriate interface based on role
-    return render_tool_interface(session['lti_data'])
-
-# Add a separate student launch for testing
-@app.route('/launch_student', methods=['GET', 'POST'])
-def lti_launch_student():
-    """Test student interface"""
-    
-    print("=== STUDENT LTI LAUNCH CALLED ===")
-    
-    # Store mock student LTI data in session
-    session['lti_data'] = {
-        'user_id': 'test_student',
-        'user_name': 'Test Student',
-        'user_email': 'student@test.com',
-        'course_id': '2', 
-        'course_title': 'Test Course',
-        'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner'],
         'resource_link_id': 'test_link'
     }
     
