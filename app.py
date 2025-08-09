@@ -1418,6 +1418,12 @@ def oidc_login():
 def lti_launch():
     """Handle LTI launch with JWT token validation"""
     
+    print("=== LTI LAUNCH ENDPOINT HIT ===")
+    print(f"Request method: {request.method}")
+    print(f"Request form keys: {list(request.form.keys())}")
+    print(f"Request args keys: {list(request.args.keys())}")
+    print(f"Content type: {request.content_type}")
+    
     # Get the JWT token from the request
     id_token = request.form.get('id_token')
     state = request.form.get('state')
@@ -1428,14 +1434,26 @@ def lti_launch():
     print(f"Session state: '{session.get('oauth_state')}'")
     print(f"Session keys: {list(session.keys())}")
     print(f"Has id_token: {bool(id_token)}")
+    print(f"ID token length: {len(id_token) if id_token else 0}")
     print("========================")
     
     if not id_token:
-        return jsonify({'error': 'Missing id_token'}), 400
+        print("ERROR: Missing id_token in request")
+        return jsonify({
+            'error': 'Missing id_token',
+            'debug': {
+                'form_keys': list(request.form.keys()),
+                'form_data': dict(request.form),
+                'method': request.method
+            }
+        }), 400
     
     # For development/testing: Try session first, then fallback to cache
     stored_state = session.get('oauth_state')
     stored_nonce = session.get('oauth_nonce')
+    
+    print(f"Stored state: '{stored_state}'")
+    print(f"Stored nonce: '{stored_nonce}'")
     
     # Fallback to cache if session is empty
     if not stored_state and state in state_cache:
@@ -1454,16 +1472,23 @@ def lti_launch():
             unverified_payload = jwt.decode(id_token, options={"verify_signature": False})
             stored_nonce = unverified_payload.get('nonce')
             print(f"Extracted nonce from JWT: {stored_nonce}")
+            print("Continuing without state validation for debugging...")
         except Exception as e:
             print(f"Could not extract nonce from token: {e}")
             return jsonify({
                 'error': 'Session lost - please try launching again', 
-                'debug': 'No session state found',
+                'debug': {
+                    'session_empty': True,
+                    'cache_empty': len(state_cache) == 0,
+                    'state_received': state,
+                    'error': str(e)
+                },
                 'suggestion': 'This might be a Railway session issue. Try refreshing the course page and launching again.'
             }), 400
     else:
         # Validate state only if we have it
         if state != stored_state:
+            print(f"State mismatch: received '{state}' vs stored '{stored_state}'")
             return jsonify({
                 'error': 'Invalid state parameter',
                 'debug': {
@@ -1475,44 +1500,52 @@ def lti_launch():
             }), 400
     
     try:
-        # Get Moodle's public keys for token verification
-        jwks_response = requests.get(LTI_CONFIG['key_set_url'])
-        jwks = jwks_response.json()
-        
-        # Decode JWT header to get key ID
-        unverified_header = jwt.get_unverified_header(id_token)
-        kid = unverified_header.get('kid')
-        
-        # Find the correct public key
-        public_key_for_verification = None
-        for key in jwks.get('keys', []):
-            if key.get('kid') == kid:
-                # Convert JWK to PEM format for verification
-                # This is simplified - in production use a proper JWK library
-                public_key_for_verification = key
-                break
-        
-        if not public_key_for_verification:
-            return jsonify({'error': 'Could not find verification key'}), 400
-        
-        # For simplicity, we'll skip full JWT verification in this basic example
-        # In production, properly verify the JWT signature
+        print("Starting JWT processing...")
         
         # Decode token (without verification for this demo)
         payload = jwt.decode(id_token, options={"verify_signature": False})
+        print("JWT decoded successfully")
+        print(f"JWT payload keys: {list(payload.keys())}")
         
         # Validate nonce
-        if payload.get('nonce') != stored_nonce:
-            print(f"Nonce validation - Received: '{payload.get('nonce')}', Expected: '{stored_nonce}'")
-            if stored_nonce:  # Only fail if we actually had a stored nonce
-                return jsonify({'error': 'Invalid nonce', 'debug': {'received_nonce': payload.get('nonce'), 'expected_nonce': stored_nonce}}), 400
-            else:
-                print("WARNING: No stored nonce - skipping nonce validation")
+        jwt_nonce = payload.get('nonce')
+        print(f"JWT nonce: '{jwt_nonce}', Expected: '{stored_nonce}'")
+        
+        if jwt_nonce != stored_nonce and stored_nonce:
+            print(f"Nonce validation failed")
+            return jsonify({
+                'error': 'Invalid nonce', 
+                'debug': {
+                    'received_nonce': jwt_nonce,
+                    'expected_nonce': stored_nonce
+                }
+            }), 400
         
         # Validate required LTI claims
-        if (payload.get('iss') != LTI_CONFIG['iss'] or 
-            payload.get('aud') != LTI_CONFIG['client_id']):
-            return jsonify({'error': 'Invalid issuer or audience'}), 400
+        jwt_iss = payload.get('iss')
+        jwt_aud = payload.get('aud')
+        print(f"JWT issuer: '{jwt_iss}', Expected: '{LTI_CONFIG['iss']}'")
+        print(f"JWT audience: '{jwt_aud}', Expected: '{LTI_CONFIG['client_id']}'")
+        
+        if jwt_iss != LTI_CONFIG['iss']:
+            return jsonify({
+                'error': 'Invalid issuer',
+                'debug': {
+                    'received_iss': jwt_iss,
+                    'expected_iss': LTI_CONFIG['iss']
+                }
+            }), 400
+            
+        if jwt_aud != LTI_CONFIG['client_id']:
+            return jsonify({
+                'error': 'Invalid audience', 
+                'debug': {
+                    'received_aud': jwt_aud,
+                    'expected_aud': LTI_CONFIG['client_id']
+                }
+            }), 400
+        
+        print("JWT validation passed, extracting LTI data...")
         
         # Extract LTI data
         lti_data = {
@@ -1525,17 +1558,84 @@ def lti_launch():
             'resource_link_id': payload.get('https://purl.imsglobal.org/spec/lti/claim/resource_link', {}).get('id'),
         }
         
-        # Store LTI data in session for file management
-        session['lti_data'] = lti_data
+        print(f"Extracted LTI data: {lti_data}")
         
+        # Store LTI data in session for file management
+        print("Storing LTI data in session...")
+        session['lti_data'] = lti_data
+        print(f"Session after storing LTI data: {list(session.keys())}")
+        
+        # Test session immediately
+        test_data = session.get('lti_data')
+        print(f"Session test - can retrieve LTI data: {bool(test_data)}")
+        
+        print("Rendering tool interface...")
         # Render the tool interface based on user role
         return render_tool_interface(lti_data)
         
     except Exception as e:
-        print(f"Token validation failed: {str(e)}")
+        print(f"EXCEPTION in LTI launch: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': f'Token validation failed: {str(e)}'}), 400
+        return jsonify({
+            'error': f'Token validation failed: {str(e)}',
+            'debug': {
+                'exception_type': type(e).__name__,
+                'exception_message': str(e)
+            }
+        }), 400
+
+# Add a debug endpoint to check what's in the session
+@app.route('/debug_session')
+def debug_session():
+    """Debug endpoint to check session contents"""
+    
+    return jsonify({
+        'session_id': session.get('_id', 'no_id'),
+        'session_keys': list(session.keys()),
+        'session_data': dict(session),
+        'lti_data_present': 'lti_data' in session,
+        'lti_data': session.get('lti_data', 'Not found')
+    })
+
+# Add a simpler landing page that shows what happened
+@app.route('/launch_status')
+def launch_status():
+    """Show current launch status"""
+    
+    lti_data = session.get('lti_data')
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>LTI Launch Status</title></head>
+    <body style="font-family: Arial; margin: 40px;">
+        <h1>LTI Launch Status</h1>
+        
+        <h2>Session Information:</h2>
+        <p><strong>Session Keys:</strong> {list(session.keys())}</p>
+        <p><strong>LTI Data Present:</strong> {'Yes' if lti_data else 'No'}</p>
+        
+        {f'''
+        <h2>LTI Data:</h2>
+        <pre>{lti_data}</pre>
+        <p><a href="/launch_test">Test Interface</a></p>
+        ''' if lti_data else '''
+        <p style="color: red;">No LTI data found in session. This suggests the LTI launch flow didn't complete properly.</p>
+        <p><a href="/debug_session">Debug Session</a></p>
+        '''}
+        
+        <h2>Debug Links:</h2>
+        <ul>
+            <li><a href="/debug_session">Session Debug</a></li>
+            <li><a href="/launch_test">Test Launch (Mock Data)</a></li>
+            <li><a href="/">Home</a></li>
+        </ul>
+    </body>
+    </html>
+    """
+    
+    return html
 
 # Public key endpoint for Moodle to verify our JWTs
 @app.route('/.well-known/jwks.json')
