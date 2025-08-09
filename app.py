@@ -487,7 +487,7 @@ def get_all_files_in_course(course_id):
 
 print("=== MOODLE API FUNCTIONS LOADED ===")
 
-# Update the file endpoint to use real Moodle API
+# File management endpoints - adding back authentication
 @app.route('/get_user_files/<user_id>')
 def get_user_files_endpoint(user_id):
     """Get files for a specific user from Moodle - Real API Version"""
@@ -577,92 +577,6 @@ def get_user_files_endpoint(user_id):
             'error': f"Server error: {str(e)}",
             'help': 'Check server logs for details'
         }), 500
-
-# File management endpoints - adding back authentication
-@app.route('/get_user_files/<user_id>')
-def get_user_files_endpoint(user_id):
-    """Get files for a specific user from Moodle - With Auth"""
-    
-    print(f"=== GET_USER_FILES ENDPOINT CALLED ===")
-    print(f"User ID: {user_id}")
-    print(f"Course ID: {request.args.get('course_id')}")
-    print(f"Session keys: {list(session.keys())}")
-    
-    # Check if user has admin privileges - with better error handling
-    lti_data = session.get('lti_data')
-    if not lti_data:
-        print("No LTI data in session")
-        return jsonify({
-            'success': False, 
-            'error': 'Not authorized - no LTI session data',
-            'help': 'Try launching the tool from Moodle first',
-            'debug': {
-                'session_keys': list(session.keys()),
-                'has_lti_data': False
-            }
-        }), 403
-    
-    user_roles = lti_data.get('roles', [])
-    print(f"User roles: {user_roles}")
-    
-    if not is_admin_user(user_roles):
-        print("User is not admin")
-        return jsonify({
-            'success': False, 
-            'error': 'Admin privileges required',
-            'debug': {
-                'user_roles': user_roles,
-                'admin_check': False
-            }
-        }), 403
-    
-    course_id = request.args.get('course_id')
-    
-    # Check if API is configured
-    if not MOODLE_CONFIG['token']:
-        print("Moodle API not configured")
-        return jsonify({
-            'success': False,
-            'error': 'Moodle API not configured',
-            'help': 'Set MOODLE_API_TOKEN environment variable',
-            'debug': {
-                'token_configured': False
-            }
-        })
-    
-    # Return mock data for now (we'll add real API calls later)
-    mock_files = [
-        {
-            'id': 'private_file1',
-            'name': 'student_essay.pdf',
-            'size': 1024000,
-            'type': 'private',
-            'mimetype': 'application/pdf',
-            'url': 'https://example.com/file1'
-        },
-        {
-            'id': 'course_file2', 
-            'name': 'lecture_slides.pptx',
-            'size': 2048000,
-            'type': 'course',
-            'mimetype': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'url': 'https://example.com/file2'
-        }
-    ]
-    
-    print(f"Returning {len(mock_files)} mock files")
-    return jsonify({
-        'success': True,
-        'files': mock_files,
-        'user_id': user_id,
-        'course_id': course_id,
-        'file_count': len(mock_files),
-        'debug': {
-            'auth_passed': True,
-            'admin_user': True,
-            'api_configured': bool(MOODLE_CONFIG['token'])
-        }
-    })
 
 # Test route to set up proper LTI session
 @app.route('/setup_session')
