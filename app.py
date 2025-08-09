@@ -762,20 +762,76 @@ def clear_session():
 # Add more file endpoints
 @app.route('/copy_moodle_files', methods=['POST'])
 def copy_moodle_files():
-    """Copy selected files from Moodle - Mock Version"""
-    
+    """Download selected Moodle files into the upload directory"""
+
     print("=== COPY_MOODLE_FILES ENDPOINT CALLED ===")
-    
+
     try:
         data = request.json or {}
-        print(f"Request data: {data}")
-        
+        learner_id = data.get('learner_id')
+        course_id = data.get('course_id')
+        selections = data.get('file_ids', [])
+
+        copied_files = []
+        errors = []
+
+        for item in selections:
+            # Allow both simple IDs and full descriptors
+            file_id = None
+            file_url = None
+            filename = None
+
+            if isinstance(item, dict):
+                file_id = item.get('id') or item.get('file_id')
+                file_url = item.get('url') or item.get('file_url')
+                filename = item.get('filename') or item.get('name')
+            else:
+                file_id = item
+
+            if not file_url:
+                errors.append({'id': file_id, 'error': 'Missing file URL'})
+                continue
+
+            try:
+                content = download_moodle_file(file_url, MOODLE_CONFIG['token'])
+
+                filename = filename or os.path.basename(file_url.split('?')[0])
+                safe_name = secure_filename(filename)
+
+                if not allowed_file(safe_name):
+                    errors.append({'id': file_id, 'error': 'File type not allowed'})
+                    continue
+
+                if len(content) > MAX_FILE_SIZE:
+                    errors.append({'id': file_id, 'error': 'File exceeds maximum size'})
+                    continue
+
+                file_path = os.path.join(UPLOAD_FOLDER, safe_name)
+                with open(file_path, 'wb') as f:
+                    f.write(content)
+
+                metadata_id = save_file_metadata({
+                    'original_name': filename,
+                    'filename': safe_name,
+                    'path': file_path,
+                    'size': len(content),
+                    'mimetype': mimetypes.guess_type(safe_name)[0],
+                    'learner_id': learner_id,
+                    'course_id': course_id
+                })
+
+                copied_files.append({'id': metadata_id, 'filename': safe_name})
+
+            except Exception as e:
+                errors.append({'id': file_id, 'error': str(e)})
+
         return jsonify({
-            'success': True,
-            'copied_count': len(data.get('file_ids', [])),
-            'message': 'Mock copy operation completed'
+            'success': len(errors) == 0,
+            'copied_count': len(copied_files),
+            'files': copied_files,
+            'errors': errors
         })
-        
+
     except Exception as e:
         print(f"Error in copy_moodle_files: {str(e)}")
         return jsonify({
@@ -785,24 +841,59 @@ def copy_moodle_files():
 
 @app.route('/upload_files', methods=['POST'])
 def upload_files():
-    """Handle file uploads - Mock Version"""
-    
+    """Handle file uploads from the browser"""
+
     print("=== UPLOAD_FILES ENDPOINT CALLED ===")
-    
+
     try:
-        # Check form data
         learner_id = request.form.get('learner_id')
         course_id = request.form.get('course_id')
         files = request.files.getlist('files')
-        
-        print(f"Upload request: learner={learner_id}, course={course_id}, files={len(files)}")
-        
+
+        uploaded = []
+        errors = []
+
+        for file in files:
+            filename = file.filename
+            if filename == '':
+                continue
+
+            if not allowed_file(filename):
+                errors.append({'filename': filename, 'error': 'File type not allowed'})
+                continue
+
+            # Determine file size
+            file.seek(0, os.SEEK_END)
+            size = file.tell()
+            file.seek(0)
+
+            if size > MAX_FILE_SIZE:
+                errors.append({'filename': filename, 'error': 'File exceeds maximum size'})
+                continue
+
+            safe_name = secure_filename(filename)
+            file_path = os.path.join(UPLOAD_FOLDER, safe_name)
+            file.save(file_path)
+
+            file_id = save_file_metadata({
+                'original_name': filename,
+                'filename': safe_name,
+                'path': file_path,
+                'size': size,
+                'mimetype': file.mimetype,
+                'learner_id': learner_id,
+                'course_id': course_id
+            })
+
+            uploaded.append({'id': file_id, 'filename': safe_name})
+
         return jsonify({
-            'success': True,
-            'uploaded_count': len(files),
-            'message': 'Mock upload operation completed'
+            'success': len(errors) == 0,
+            'uploaded_count': len(uploaded),
+            'files': uploaded,
+            'errors': errors
         })
-        
+
     except Exception as e:
         print(f"Error in upload_files: {str(e)}")
         return jsonify({
