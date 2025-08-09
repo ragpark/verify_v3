@@ -713,27 +713,651 @@ def delete_file(file_id):
         'file_id': file_id
     })
 
-# Simple LTI launch for testing
+# Complete LTI interface components
+def render_tool_interface(lti_data):
+    """Render the main tool interface based on user role"""
+    
+    user_roles = lti_data.get('roles', [])
+    is_admin = is_admin_user(user_roles)
+    
+    if is_admin:
+        return render_admin_interface(lti_data)
+    else:
+        return render_student_interface(lti_data)
+
+def render_admin_interface(lti_data):
+    """Render admin/instructor interface with Moodle file management"""
+    
+    course_id = lti_data.get('course_id')
+    learners = get_learners_in_course(course_id)
+    all_files = get_all_files_in_course(course_id)
+    
+    # Check if Moodle API is configured
+    moodle_api_available = bool(MOODLE_CONFIG['token'])
+    
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LTI File Manager - Admin</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 1400px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                background-color: white;
+                padding: 30px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                margin-bottom: 20px;
+            }
+            .header {
+                text-align: center;
+                color: #333;
+                border-bottom: 2px solid #2196F3;
+                padding-bottom: 20px;
+                margin-bottom: 30px;
+            }
+            .admin-badge {
+                background-color: #2196F3;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 20px;
+                font-size: 14px;
+                margin: 10px 0;
+            }
+            .warning-badge {
+                background-color: #ff9800;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 20px;
+                font-size: 12px;
+                margin: 5px 0;
+            }
+            .section {
+                margin: 30px 0;
+                padding: 20px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+            }
+            .section h3 {
+                color: #333;
+                margin-top: 0;
+                border-bottom: 1px solid #eee;
+                padding-bottom: 10px;
+            }
+            .two-column {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+            }
+            .learner-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 10px;
+                margin: 20px 0;
+                max-height: 300px;
+                overflow-y: auto;
+            }
+            .learner-card {
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 10px;
+                background-color: #f9f9f9;
+                cursor: pointer;
+                transition: all 0.2s;
+                font-size: 14px;
+            }
+            .learner-card:hover {
+                background-color: #e3f2fd;
+            }
+            .learner-card.selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            .file-browser {
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                max-height: 400px;
+                overflow-y: auto;
+            }
+            .file-item {
+                padding: 10px;
+                border-bottom: 1px solid #eee;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                transition: background-color 0.2s;
+            }
+            .file-item:hover {
+                background-color: #f0f0f0;
+            }
+            .file-item.selected {
+                background-color: #e3f2fd;
+            }
+            .file-item input[type="checkbox"] {
+                margin-right: 10px;
+            }
+            .file-icon {
+                margin-right: 10px;
+                font-size: 18px;
+            }
+            .file-details {
+                flex-grow: 1;
+            }
+            .file-name {
+                font-weight: bold;
+                margin-bottom: 2px;
+            }
+            .file-meta {
+                font-size: 12px;
+                color: #666;
+            }
+            .button {
+                background-color: #2196F3;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 16px;
+                margin: 5px;
+            }
+            .button:hover {
+                background-color: #1976D2;
+            }
+            .button:disabled {
+                background-color: #ccc;
+                cursor: not-allowed;
+            }
+            .button.secondary {
+                background-color: #757575;
+            }
+            .files-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+            }
+            .files-table th,
+            .files-table td {
+                border: 1px solid #ddd;
+                padding: 12px;
+                text-align: left;
+            }
+            .files-table th {
+                background-color: #f5f5f5;
+            }
+            .alert {
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 4px;
+            }
+            .alert-success {
+                background-color: #d4edda;
+                color: #155724;
+                border: 1px solid #c3e6cb;
+            }
+            .alert-error {
+                background-color: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }
+            .hidden {
+                display: none;
+            }
+            .loading {
+                text-align: center;
+                padding: 20px;
+                color: #666;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📁 LTI File Manager</h1>
+                <div class="admin-badge">Administrator</div>
+                {% if not moodle_api_available %}
+                <div class="warning-badge">⚠️ Moodle API not configured - using demo data</div>
+                {% endif %}
+                <p>Manage learner files for {{ lti_data.course_title or 'this course' }}</p>
+            </div>
+            
+            <div class="section">
+                <h3>👤 Select Learner and 📂 Browse Moodle Files</h3>
+                <div class="two-column">
+                    <div>
+                        <h4>Students in Course:</h4>
+                        <div class="learner-grid" id="learnerGrid">
+                            {% for learner in learners %}
+                            <div class="learner-card" onclick="selectLearner('{{ learner.id }}', '{{ learner.name }}')" id="learner-{{ learner.id }}">
+                                <strong>{{ learner.name }}</strong><br>
+                                <small>{{ learner.email }}</small>
+                                {% if learner.username %}
+                                <br><small>@{{ learner.username }}</small>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h4>User's Files in Moodle:</h4>
+                        <div id="fileBrowserContainer">
+                            <div class="loading" id="selectUserPrompt">
+                                ← Select a student to browse their files
+                            </div>
+                            <div class="file-browser hidden" id="fileBrowser"></div>
+                        </div>
+                        
+                        <div style="margin-top: 15px;">
+                            <button type="button" id="refreshFilesBtn" class="button secondary" onclick="refreshUserFiles()" disabled>
+                                🔄 Refresh Files
+                            </button>
+                            <button type="button" id="copyFilesBtn" class="button" onclick="copySelectedFiles()" disabled>
+                                📋 Copy Selected Files to Student Account
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h3>📋 All Files in Course</h3>
+                <table class="files-table">
+                    <thead>
+                        <tr>
+                            <th>File Name</th>
+                            <th>Learner</th>
+                            <th>Size</th>
+                            <th>Source</th>
+                            <th>Uploaded</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for file in all_files %}
+                        <tr>
+                            <td>{{ file.original_name }}</td>
+                            <td>{{ file.learner_name }}</td>
+                            <td>{{ "%.1f KB"|format(file.size / 1024) }}</td>
+                            <td>{{ file.source or 'Local Upload' }}</td>
+                            <td>{{ file.uploaded_at[:19] }}</td>
+                            <td>
+                                <button class="button" onclick="downloadFile('{{ file.id }}')">Download</button>
+                                <button class="button" onclick="deleteFile('{{ file.id }}')" style="background-color: #f44336;">Delete</button>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" style="text-align: center;">No files uploaded yet</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div id="alerts"></div>
+        
+        <script>
+            let selectedLearner = null;
+            let selectedFiles = [];
+            let userFiles = [];
+            
+            function selectLearner(learnerId, learnerName) {
+                // Update UI
+                document.querySelectorAll('.learner-card').forEach(card => {
+                    card.classList.remove('selected');
+                });
+                document.getElementById('learner-' + learnerId).classList.add('selected');
+                
+                selectedLearner = {id: learnerId, name: learnerName};
+                
+                // Load user's files
+                loadUserFiles(learnerId);
+                
+                // Enable refresh button
+                document.getElementById('refreshFilesBtn').disabled = false;
+            }
+            
+            function loadUserFiles(userId) {
+                const fileBrowser = document.getElementById('fileBrowser');
+                const selectPrompt = document.getElementById('selectUserPrompt');
+                
+                // Show loading
+                fileBrowser.classList.add('hidden');
+                selectPrompt.textContent = 'Loading files...';
+                selectPrompt.classList.remove('hidden');
+                
+                // Fetch user files
+                fetch(`/get_user_files/${userId}?course_id={{ lti_data.course_id }}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        userFiles = data.files;
+                        displayUserFiles(data.files);
+                        selectPrompt.classList.add('hidden');
+                        fileBrowser.classList.remove('hidden');
+                    } else {
+                        showAlert(data.error || 'Failed to load files', 'error');
+                        selectPrompt.textContent = 'Failed to load files';
+                    }
+                })
+                .catch(error => {
+                    showAlert('Error loading files: ' + error.message, 'error');
+                    selectPrompt.textContent = 'Error loading files';
+                });
+            }
+            
+            function displayUserFiles(files) {
+                const fileBrowser = document.getElementById('fileBrowser');
+                
+                if (files.length === 0) {
+                    fileBrowser.innerHTML = '<div class="loading">No files found for this user</div>';
+                    return;
+                }
+                
+                let html = '';
+                files.forEach(file => {
+                    const icon = getFileIcon(file.mimetype);
+                    const sizeStr = file.size > 0 ? `${(file.size / 1024).toFixed(1)} KB` : 'Unknown size';
+                    const typeStr = file.type === 'private' ? 'Private Files' : file.type === 'course' ? 'Course Files' : 'Mock Files';
+                    
+                    html += `
+                        <div class="file-item" onclick="toggleFileSelection('${file.id}')">
+                            <input type="checkbox" id="file-${file.id}" onchange="updateFileSelection()">
+                            <div class="file-icon">${icon}</div>
+                            <div class="file-details">
+                                <div class="file-name">${file.name}</div>
+                                <div class="file-meta">${sizeStr} • ${typeStr}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                fileBrowser.innerHTML = html;
+            }
+            
+            function getFileIcon(mimetype) {
+                if (!mimetype) return '📄';
+                if (mimetype.startsWith('image/')) return '🖼️';
+                if (mimetype.includes('pdf')) return '📕';
+                if (mimetype.includes('word') || mimetype.includes('document')) return '📝';
+                if (mimetype.includes('spreadsheet') || mimetype.includes('excel')) return '📊';
+                if (mimetype.includes('presentation') || mimetype.includes('powerpoint')) return '📺';
+                return '📄';
+            }
+            
+            function toggleFileSelection(fileId) {
+                const checkbox = document.getElementById(`file-${fileId}`);
+                checkbox.checked = !checkbox.checked;
+                updateFileSelection();
+            }
+            
+            function updateFileSelection() {
+                selectedFiles = [];
+                document.querySelectorAll('#fileBrowser input[type="checkbox"]:checked').forEach(cb => {
+                    const fileId = cb.id.replace('file-', '');
+                    selectedFiles.push(fileId);
+                });
+                
+                const copyBtn = document.getElementById('copyFilesBtn');
+                copyBtn.disabled = selectedFiles.length === 0 || !selectedLearner;
+                copyBtn.textContent = selectedFiles.length > 0 ? 
+                    `📋 Copy ${selectedFiles.length} Selected File(s)` : 
+                    '📋 Copy Selected Files to Student Account';
+            }
+            
+            function refreshUserFiles() {
+                if (selectedLearner) {
+                    loadUserFiles(selectedLearner.id);
+                }
+            }
+            
+            function copySelectedFiles() {
+                if (!selectedLearner || selectedFiles.length === 0) {
+                    showAlert('Please select a learner and files to copy', 'error');
+                    return;
+                }
+                
+                const copyBtn = document.getElementById('copyFilesBtn');
+                copyBtn.disabled = true;
+                copyBtn.textContent = 'Copying files...';
+                
+                const data = {
+                    learner_id: selectedLearner.id,
+                    learner_name: selectedLearner.name,
+                    course_id: '{{ lti_data.course_id }}',
+                    file_ids: selectedFiles
+                };
+                
+                fetch('/copy_moodle_files', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showAlert(`Successfully copied ${data.copied_count} file(s)!`);
+                        // Reset selection
+                        selectedFiles = [];
+                        document.querySelectorAll('#fileBrowser input[type="checkbox"]').forEach(cb => {
+                            cb.checked = false;
+                        });
+                        updateFileSelection();
+                        // Reload page to show new files
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        showAlert(data.error || 'Copy failed', 'error');
+                    }
+                })
+                .catch(error => {
+                    showAlert('Copy failed: ' + error.message, 'error');
+                })
+                .finally(() => {
+                    copyBtn.disabled = false;
+                    updateFileSelection();
+                });
+            }
+            
+            function showAlert(message, type = 'success') {
+                const alertsDiv = document.getElementById('alerts');
+                const alert = document.createElement('div');
+                alert.className = `alert alert-${type}`;
+                alert.textContent = message;
+                alertsDiv.appendChild(alert);
+                
+                setTimeout(() => {
+                    alert.remove();
+                }, 5000);
+            }
+            
+            function downloadFile(fileId) {
+                window.open('/download_file/' + fileId, '_blank');
+            }
+            
+            function deleteFile(fileId) {
+                if (confirm('Are you sure you want to delete this file?')) {
+                    fetch('/delete_file/' + fileId, {method: 'DELETE'})
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            showAlert('File deleted successfully!');
+                            location.reload();
+                        } else {
+                            showAlert(data.error || 'Delete failed', 'error');
+                        }
+                    })
+                    .catch(error => {
+                        showAlert('Delete failed: ' + error.message, 'error');
+                    });
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """
+    
+    return render_template_string(html_template, 
+                                lti_data=lti_data, 
+                                learners=learners, 
+                                all_files=all_files,
+                                moodle_api_available=moodle_api_available)
+
+def render_student_interface(lti_data):
+    """Render student interface showing their files"""
+    
+    course_id = lti_data.get('course_id')
+    user_id = lti_data.get('user_id')
+    user_files = get_files_for_learner(user_id, course_id)
+    
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LTI File Manager - Student</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                background-color: white;
+                padding: 30px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .header {
+                text-align: center;
+                color: #333;
+                border-bottom: 2px solid #4CAF50;
+                padding-bottom: 20px;
+                margin-bottom: 30px;
+            }
+            .info-section {
+                margin: 20px 0;
+                padding: 15px;
+                background-color: #f9f9f9;
+                border-left: 4px solid #4CAF50;
+            }
+            .files-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+            }
+            .files-table th,
+            .files-table td {
+                border: 1px solid #ddd;
+                padding: 12px;
+                text-align: left;
+            }
+            .files-table th {
+                background-color: #f5f5f5;
+            }
+            .button {
+                background-color: #4CAF50;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                margin: 5px;
+            }
+            .button:hover {
+                background-color: #45a049;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📁 My Files</h1>
+                <p>Hello {{ lti_data.user_name or "Student" }}!</p>
+            </div>
+            
+            <div class="info-section">
+                <h3>Your Uploaded Files</h3>
+                {% if user_files %}
+                    <table class="files-table">
+                        <thead>
+                            <tr>
+                                <th>File Name</th>
+                                <th>Size</th>
+                                <th>Uploaded</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for file in user_files %}
+                            <tr>
+                                <td>{{ file.original_name }}</td>
+                                <td>{{ "%.1f KB"|format(file.size / 1024) }}</td>
+                                <td>{{ file.uploaded_at[:19] }}</td>
+                                <td>
+                                    <button class="button" onclick="downloadFile('{{ file.id }}')">Download</button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p>No files have been uploaded for you yet.</p>
+                    <p>Your instructor can upload files to your account from their admin interface.</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <script>
+            function downloadFile(fileId) {
+                window.open('/download_file/' + fileId, '_blank');
+            }
+        </script>
+    </body>
+    </html>
+    """
+    
+    return render_template_string(html_template, lti_data=lti_data, user_files=user_files)
+
+# Simple LTI launch for testing - enhanced to render the full interface
 @app.route('/launch', methods=['POST'])
 def lti_launch_simple():
-    """Simple LTI launch for testing"""
+    """Simple LTI launch that renders the full interface"""
     
     print("=== LTI LAUNCH CALLED ===")
     
-    # Store some mock LTI data in session
+    # Store mock LTI data in session
     session['lti_data'] = {
-        'user_id': 'test_user',
-        'user_name': 'Test User',
+        'user_id': 'test_admin',
+        'user_name': 'Test Administrator',
+        'user_email': 'admin@test.com', 
         'course_id': '2',
         'course_title': 'Test Course',
-        'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor']
+        'roles': ['http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor'],
+        'resource_link_id': 'test_link'
     }
     
-    return jsonify({
-        'success': True,
-        'message': 'Mock LTI launch completed',
-        'lti_data': session['lti_data']
-    })
+    # Render the appropriate interface based on role
+    return render_tool_interface(session['lti_data'])
+
+print("=== COMPLETE LTI INTERFACE LOADED ===")
+
+# Update get_learners_in_course to use real Moodle data
 
 # Test session endpoint
 @app.route('/test_session')
