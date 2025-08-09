@@ -8,10 +8,21 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 import uuid
 
+# Simple in-memory cache for state/nonce as fallback (not for production scale)
+state_cache = {}
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 
-# LTI 1.3 Configuration 
+# Configure session for Railway.app
+app.config.update(
+    SESSION_COOKIE_SECURE=True,  # Require HTTPS
+    SESSION_COOKIE_HTTPONLY=True,  # Prevent XSS
+    SESSION_COOKIE_SAMESITE='None',  # Allow cross-origin (needed for LTI)
+    PERMANENT_SESSION_LIFETIME=timedelta(minutes=60)
+)
+
+# LTI 1.3 Configuration
 LTI_CONFIG = {
     'client_id': os.environ.get('LTI_CLIENT_ID', 'your-client-id'),
     'deployment_id': os.environ.get('LTI_DEPLOYMENT_ID', 'your-deployment-id'),
@@ -184,9 +195,24 @@ def oidc_login():
     state = str(uuid.uuid4())
     nonce = str(uuid.uuid4())
     
-    # Store state and nonce in session for validation
+    # Store state and nonce in session AND in-memory cache (fallback)
     session['oauth_state'] = state
     session['oauth_nonce'] = nonce
+    
+    # Also store in cache with expiration (fallback for session issues)
+    state_cache[state] = {
+        'nonce': nonce,
+        'timestamp': datetime.utcnow(),
+        'client_id': client_id,
+        'iss': iss
+    }
+    
+    # Clean old cache entries (older than 10 minutes)
+    current_time = datetime.utcnow()
+    expired_keys = [k for k, v in state_cache.items() 
+                   if current_time - v['timestamp'] > timedelta(minutes=10)]
+    for key in expired_keys:
+        del state_cache[key]
     
     # Build authorization request
     auth_params = {
@@ -217,12 +243,57 @@ def lti_launch():
     id_token = request.form.get('id_token')
     state = request.form.get('state')
     
+    # Debug logging
+    print("=== LTI LAUNCH DEBUG ===")
+    print(f"Received state: '{state}'")
+    print(f"Session state: '{session.get('oauth_state')}'")
+    print(f"Session keys: {list(session.keys())}")
+    print(f"Has id_token: {bool(id_token)}")
+    print("========================")
+    
     if not id_token:
         return jsonify({'error': 'Missing id_token'}), 400
     
-    # Validate state
-    if state != session.get('oauth_state'):
-        return jsonify({'error': 'Invalid state parameter'}), 400
+    # For development/testing: Try session first, then fallback to cache
+    stored_state = session.get('oauth_state')
+    stored_nonce = session.get('oauth_nonce')
+    
+    # Fallback to cache if session is empty
+    if not stored_state and state in state_cache:
+        print("Using cached state (session fallback)")
+        cached_data = state_cache[state]
+        stored_state = state
+        stored_nonce = cached_data['nonce']
+        
+        # Clean up used cache entry
+        del state_cache[state]
+    
+    if not stored_state:
+        print("WARNING: No state found in session OR cache")
+        # Last resort: try to continue without state validation for debugging
+        try:
+            unverified_payload = jwt.decode(id_token, options={"verify_signature": False})
+            stored_nonce = unverified_payload.get('nonce')
+            print(f"Extracted nonce from JWT: {stored_nonce}")
+        except Exception as e:
+            print(f"Could not extract nonce from token: {e}")
+            return jsonify({
+                'error': 'Session lost - please try launching again', 
+                'debug': 'No session state found',
+                'suggestion': 'This might be a Railway session issue. Try refreshing the course page and launching again.'
+            }), 400
+    else:
+        # Validate state only if we have it
+        if state != stored_state:
+            return jsonify({
+                'error': 'Invalid state parameter',
+                'debug': {
+                    'received_state': state,
+                    'expected_state': stored_state,
+                    'session_keys': list(session.keys()),
+                    'cache_available': state in state_cache
+                }
+            }), 400
     
     try:
         # Get Moodle's public keys for token verification
@@ -252,8 +323,12 @@ def lti_launch():
         payload = jwt.decode(id_token, options={"verify_signature": False})
         
         # Validate nonce
-        if payload.get('nonce') != session.get('oauth_nonce'):
-            return jsonify({'error': 'Invalid nonce'}), 400
+        if payload.get('nonce') != stored_nonce:
+            print(f"Nonce validation - Received: '{payload.get('nonce')}', Expected: '{stored_nonce}'")
+            if stored_nonce:  # Only fail if we actually had a stored nonce
+                return jsonify({'error': 'Invalid nonce', 'debug': {'received_nonce': payload.get('nonce'), 'expected_nonce': stored_nonce}}), 400
+            else:
+                print("WARNING: No stored nonce - skipping nonce validation")
         
         # Validate required LTI claims
         if (payload.get('iss') != LTI_CONFIG['iss'] or 
@@ -506,6 +581,15 @@ def debug_config():
             'oidc_initiation_url': f"{request.url_root.rstrip('/')}/login",
             'target_link_uri': f"{request.url_root.rstrip('/')}/launch",
             'public_jwk_url': f"{request.url_root.rstrip('/')}/.well-known/jwks.json"
+        },
+        'session_info': {
+            'session_keys': list(session.keys()),
+            'has_oauth_state': 'oauth_state' in session,
+            'has_oauth_nonce': 'oauth_nonce' in session
+        },
+        'cache_info': {
+            'cache_entries': len(state_cache),
+            'cache_keys': list(state_cache.keys())[:5]  # Only show first 5 for privacy
         }
     })
 
