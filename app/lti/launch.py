@@ -27,6 +27,7 @@ def _fail(reason: str, code: int = 400):
 
 
 @bp.route("/lti/login", methods=["GET", "POST"], strict_slashes=False)
+@bp.route("/lti/login/", methods=["GET", "POST"], strict_slashes=False)
 def login():
     """Initiate OIDC login flow."""
     # IMMEDIATE DEBUG - Print to console AND log
@@ -92,8 +93,8 @@ def login():
     return redirect(auth_url)
 
 
-@bp.route("/lti/launch", methods=["POST", "GET"], strict_slashes=False)
 @bp.route("/lti/launch/", methods=["POST", "GET"], strict_slashes=False)
+@bp.route("/lti/launch", methods=["POST", "GET"], strict_slashes=False)
 def lti_launch():
     """Handle LTI launch after OIDC authentication."""
     # Debug: Log all incoming parameters
@@ -242,8 +243,8 @@ def lti_launch():
     })
 
 
-@bp.route("/lti/deep_link", methods=["GET", "POST"], strict_slashes=False)
 @bp.route("/lti/deep_link/", methods=["GET", "POST"], strict_slashes=False)
+@bp.route("/lti/deep_link", methods=["GET", "POST"], strict_slashes=False)
 def deep_link():
     """Deep link selection UI - teachers choose resources here."""
     if request.method == "GET":
@@ -268,8 +269,8 @@ def deep_link():
     return redirect(url_for("lti.deep_link_return"))
 
 
-@bp.route("/lti/deep_link/return", methods=["GET", "POST"], strict_slashes=False)
 @bp.route("/lti/deep_link/return/", methods=["GET", "POST"], strict_slashes=False)
+@bp.route("/lti/deep_link/return", methods=["GET", "POST"], strict_slashes=False)
 def deep_link_return():
     """POST a DeepLinkingResponse JWT back to the LMS."""
     deep_link_return_url = session.get("deep_link_return_url") or current_app.config.get("DEEP_LINK_RETURN_URL")
@@ -425,6 +426,133 @@ def debug_platforms():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/lti/debug/manual-register", methods=["GET", "POST"])
+def manual_register():
+    """Manually register the Moodle platform for testing."""
+    if request.method == "GET":
+        return f"""
+        <html>
+        <body>
+        <h2>Manual Platform Registration</h2>
+        <p>Based on your Moodle login data, register the platform:</p>
+        
+        <form method="POST">
+            <p>Issuer: <input name="issuer" value="https://cluepony.com/moodle45" style="width: 400px;"></p>
+            <p>Client ID: <input name="client_id" value="WCAQnJ91bvOQ8D3" style="width: 400px;"></p>
+            <p>Auth Login URL: <input name="auth_login_url" value="https://cluepony.com/moodle45/mod/lti/auth.php" style="width: 400px;"></p>
+            <p>JWKS URI: <input name="jwks_uri" value="https://cluepony.com/moodle45/mod/lti/certs.php" style="width: 400px;"></p>
+            <p><input type="submit" value="Register Platform"></p>
+        </form>
+        </body>
+        </html>
+        """
+    else:
+        # Manual registration
+        try:
+            platform = Platform(
+                issuer=request.form.get("issuer"),
+                client_id=request.form.get("client_id"),
+                auth_login_url=request.form.get("auth_login_url"),
+                jwks_uri=request.form.get("jwks_uri")
+            )
+            db.session.add(platform)
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Platform registered successfully",
+                "platform": {
+                    "issuer": platform.issuer,
+                    "client_id": platform.client_id
+                }
+            })
+@bp.route("/lti/debug/manual-register", methods=["GET", "POST"])
+def manual_register():
+    """Manually register the Moodle platform for testing."""
+    if request.method == "GET":
+        return f"""
+        <html>
+        <body>
+        <h2>Manual Platform Registration</h2>
+        <p>Based on your Moodle login data, register the platform:</p>
+        
+        <form method="POST">
+            <p>Issuer: <input name="issuer" value="https://cluepony.com/moodle45" style="width: 400px;" required></p>
+            <p>Client ID: <input name="client_id" value="WCAQnJ91bvOQ8D3" style="width: 400px;" required></p>
+            <p>Auth Login URL: <input name="auth_login_url" value="https://cluepony.com/moodle45/mod/lti/auth.php" style="width: 400px;" required></p>
+            <p>JWKS URI: <input name="jwks_uri" value="https://cluepony.com/moodle45/mod/lti/certs.php" style="width: 400px;" required></p>
+            <p><input type="submit" value="Register Platform"></p>
+        </form>
+        </body>
+        </html>
+        """
+    else:
+        # Manual registration
+        try:
+            platform = Platform(
+                issuer=request.form.get("issuer"),
+                client_id=request.form.get("client_id"),
+                auth_login_url=request.form.get("auth_login_url"),
+                jwks_uri=request.form.get("jwks_uri")
+            )
+            db.session.add(platform)
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Platform registered successfully",
+                "platform": {
+                    "issuer": platform.issuer,
+                    "client_id": platform.client_id,
+                    "auth_login_url": platform.auth_login_url,
+                    "jwks_uri": platform.jwks_uri
+                }
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+def manual_register():
+    """Manually register the Moodle platform for testing."""
+    if request.method == "GET":
+        return f"""
+        <html>
+        <body>
+        <h2>Manual Platform Registration</h2>
+        <p>Based on your Moodle login data, register the platform:</p>
+        
+        <form method="POST">
+            <p>Issuer: <input name="issuer" value="https://cluepony.com/moodle45" style="width: 400px;"></p>
+            <p>Client ID: <input name="client_id" value="WCAQnJ91bvOQ8D3" style="width: 400px;"></p>
+            <p>Auth Login URL: <input name="auth_login_url" value="https://cluepony.com/moodle45/mod/lti/auth.php" style="width: 400px;"></p>
+            <p>JWKS URI: <input name="jwks_uri" value="https://cluepony.com/moodle45/mod/lti/certs.php" style="width: 400px;"></p>
+            <p><input type="submit" value="Register Platform"></p>
+        </form>
+        </body>
+        </html>
+        """
+    else:
+        # Manual registration
+        try:
+            platform = Platform(
+                issuer=request.form.get("issuer"),
+                client_id=request.form.get("client_id"),
+                auth_login_url=request.form.get("auth_login_url"),
+                jwks_uri=request.form.get("jwks_uri")
+            )
+            db.session.add(platform)
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Platform registered successfully",
+                "platform": {
+                    "issuer": platform.issuer,
+                    "client_id": platform.client_id
+                }
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+
 # Health check endpoint for debugging
 @bp.route("/lti/health", methods=["GET"])
 def health():
@@ -445,11 +573,46 @@ def health():
 def test_endpoint():
     """Simple test endpoint to verify server is reachable."""
     print("TEST ENDPOINT HIT!")
-    return jsonify({
+    response_data = {
         "message": "LTI endpoints are working!",
         "method": request.method,
         "url": request.url,
         "args": dict(request.args),
         "form": dict(request.form),
+        "headers": dict(request.headers),
         "timestamp": datetime.utcnow().isoformat()
-    })
+    }
+    print(f"Response data: {response_data}")
+    return jsonify(response_data)
+
+
+@bp.route("/lti/simulate-moodle", methods=["GET", "POST"])
+def simulate_moodle():
+    """Simulate what Moodle should send to login endpoint."""
+    if request.method == "GET":
+        return f"""
+        <html>
+        <body>
+        <h2>Simulate Moodle LTI Login</h2>
+        <p>This simulates what Moodle should send to your login endpoint:</p>
+        
+        <form method="POST" action="{url_for('lti.login')}">
+            <p><strong>Required Parameters:</strong></p>
+            <p>iss: <input name="iss" value="https://your-moodle.com" style="width: 400px;"></p>
+            <p>target_link_uri: <input name="target_link_uri" value="{url_for('lti.lti_launch', _external=True)}" style="width: 400px;"></p>
+            <p>login_hint: <input name="login_hint" value="123456" style="width: 400px;"></p>
+            <p>client_id: <input name="client_id" value="your-client-id" style="width: 400px;"></p>
+            <p><input type="submit" value="Test Moodle Login Flow"></p>
+        </form>
+        
+        <h3>What should happen:</h3>
+        <ol>
+        <li>You click "Test Moodle Login Flow"</li>
+        <li>You should see console output with "===== LTI LOGIN ENDPOINT HIT!"</li>
+        <li>You should either get an error about unknown platform OR a redirect to platform auth URL</li>
+        </ol>
+        </body>
+        </html>
+        """
+    else:
+        return "This should be handled by the login endpoint"
