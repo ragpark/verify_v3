@@ -52,80 +52,101 @@ def login():
     return redirect(f"{platform.auth_login_url}?{urlencode(params)}")
 
 
+# app/lti/launch.py
+import os
+from datetime import datetime
+from flask import Blueprint, request, abort, current_app, jsonify, redirect, session
+import jwt
+from .. import db
+from ..models import State, Nonce, Platform, Deployment
+
+bp = Blueprint("lti", __name__)
+LTI_DEBUG = os.getenv("LTI_DEBUG", "0") == "1"
+
+def _fail(reason: str, code: int = 400):
+    current_app.logger.warning("LTI LAUNCH FAIL: %s", reason)
+    if LTI_DEBUG:
+        return jsonify({"error": reason}), code
+    abort(code, reason)
+
 @bp.route("/lti/launch", methods=["POST", "GET"], strict_slashes=False)
 def lti_launch():
-    """Handle an LTI launch by verifying the id_token."""
-    # Read from form (normal Moodle) or query (after a redirect)
+    # Accept POST (normal) and GET (in case a proxy rewrote it)
     id_token = request.form.get("id_token") or request.args.get("id_token")
     state_value = request.form.get("state") or request.args.get("state")
 
     if not id_token or not state_value:
-        abort(400, "missing id_token or state")
+        return _fail(
+            f"missing id_token or state (method={request.method}, ct={request.headers.get('Content-Type')}, "
+            f"args={list(request.args.keys())}, form={list(request.form.keys())})"
+        )
 
-    # Validate state
+    # Validate and consume state
     state_row = State.query.filter_by(value=state_value).first()
-    if not state_row or state_row.expires_at < datetime.utcnow():
-        abort(400, "invalid state")
+    if not state_row:
+        return _fail("invalid state: not found")
+    if state_row.expires_at < datetime.utcnow():
+        db.session.delete(state_row); db.session.commit()
+        return _fail("invalid state: expired")
     redirect_after = state_row.redirect_after
-    db.session.delete(state_row)
-    db.session.commit()
+    db.session.delete(state_row); db.session.commit()
 
-    # Peek at JWT to get iss/aud/nonce before verifying signature
-    unverified = jwt.decode(id_token, options={"verify_signature": False})
+    # Peek unverified for iss/aud/nonce
+    try:
+        unverified = jwt.decode(id_token, options={"verify_signature": False})
+    except Exception as e:
+        return _fail(f"jwt decode (unverified) failed: {e}")
     iss = unverified.get("iss")
     aud = unverified.get("aud")
     nonce_value = unverified.get("nonce")
     if not iss:
-        abort(400, "missing iss")
+        return _fail("missing iss in id_token")
 
     platform = Platform.query.filter_by(issuer=iss).first()
     if not platform:
-        abort(400, "unknown platform")
-    if platform.client_id not in (aud if isinstance(aud, list) else [aud]):
-        abort(400, "aud mismatch")
+        return _fail(f"unknown platform: {iss}")
+    acceptable_aud = aud if isinstance(aud, list) else [aud]
+    if platform.client_id not in acceptable_aud:
+        return _fail(f"aud mismatch: token aud={acceptable_aud}, expected {platform.client_id}")
 
-    # Fetch and verify signature
-    jwk_client = jwt.PyJWKClient(platform.jwks_uri)
-    signing_key = jwk_client.get_signing_key_from_jwt(id_token)
-    data = jwt.decode(
-        id_token,
-        signing_key.key,
-        algorithms=["RS256"],
-        audience=platform.client_id,
-        issuer=platform.issuer,
-    )
+    # Verify signature
+    try:
+        jwk_client = jwt.PyJWKClient(platform.jwks_uri)
+        signing_key = jwk_client.get_signing_key_from_jwt(id_token)
+        data = jwt.decode(
+            id_token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=platform.client_id,
+            issuer=platform.issuer,
+        )
+    except Exception as e:
+        return _fail(f"jwt verify failed: {e}")
 
     # Validate and consume nonce
     nonce_row = Nonce.query.filter_by(value=nonce_value).first()
-    if not nonce_row or nonce_row.expires_at < datetime.utcnow():
-        abort(400, "invalid nonce")
-    db.session.delete(nonce_row)
-    db.session.commit()
+    if not nonce_row:
+        return _fail("invalid nonce: not found")
+    if nonce_row.expires_at < datetime.utcnow():
+        db.session.delete(nonce_row); db.session.commit()
+        return _fail("invalid nonce: expired")
+    db.session.delete(nonce_row); db.session.commit()
 
-    # Upsert deployment
-    deployment_id = data.get("https://purl.imsglobal.org/spec/lti/claim/deployment_id")
-    if deployment_id:
-        exists = Deployment.query.filter_by(
-            platform_id=platform.id, deployment_id=deployment_id
-        ).first()
-        if not exists:
-            db.session.add(Deployment(platform_id=platform.id, deployment_id=deployment_id))
-            db.session.commit()
+    # Persist deployment (idempotent)
+    dep_id = data.get("https://purl.imsglobal.org/spec/lti/claim/deployment_id")
+    if dep_id:
+        if not Deployment.query.filter_by(platform_id=platform.id, deployment_id=dep_id).first():
+            db.session.add(Deployment(platform_id=platform.id, deployment_id=dep_id)); db.session.commit()
 
-    # Deep Linking: stash return URL for the selection response
-    message_type = data.get("https://purl.imsglobal.org/spec/lti/claim/message_type")
-    if message_type == "LtiDeepLinkingRequest":
+    # Deep Linking: capture return URL
+    if data.get("https://purl.imsglobal.org/spec/lti/claim/message_type") == "LtiDeepLinkingRequest":
         settings = data.get("https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings", {})
-        deep_link_return_url = settings.get("deep_link_return_url")
-        if deep_link_return_url:
-            session["deep_link_return_url"] = deep_link_return_url
+        if settings.get("deep_link_return_url"):
+            session["deep_link_return_url"] = settings["deep_link_return_url"]
 
     if redirect_after:
         return redirect(redirect_after)
-
     return jsonify({"launch": "ok"})
-
-
 
 @bp.route("/lti/deep_link", methods=["GET", "POST"], strict_slashes=False)
 def deep_link():
