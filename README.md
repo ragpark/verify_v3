@@ -1,4 +1,4 @@
-# Verify LTI Tool
+# Verify LTI Tool.
 
 This project provides a Flask based [LTI 1.3](https://www.imsglobal.org/spec/lti/v1p3/) application that exposes a minimal file
 manager together with [Dynamic Registration](https://www.imsglobal.org/spec/lti-dynamic/v1p0/) so learning management systems
