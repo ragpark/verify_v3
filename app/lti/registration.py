@@ -25,33 +25,56 @@ bp = Blueprint("registration", __name__)
 
 
 def _tool_configuration() -> dict:
-    """Return the static tool configuration metadata."""
     cfg: Config = current_app.config  # type: ignore
-    base_url = cfg["APP_BASE_URL"]
-    deep_link_return = cfg.get("DEEP_LINK_RETURN_URL", f"{base_url}/lti/deep_link/return")
+    base_url = cfg["APP_BASE_URL"].rstrip("/")
+
+    # Enforce HTTPS early to avoid 400s from platforms
+    if not base_url.startswith("https://"):
+        current_app.logger.error("APP_BASE_URL must be HTTPS for LTI 1.3/Dynamic Registration.")
+        abort(400, "APP_BASE_URL must be HTTPS")
+
+    # Contacts: include only non-empty strings
+    contacts = []
+    contact = cfg.get("TOOL_CONTACT_EMAIL")
+    if contact:
+        contacts.append(contact)
+
+    tool_launch = f"{base_url}/lti/launch"
+    deep_link_select = f"{base_url}/lti/deep_link"  # content selection UI in your tool
+    jwks_uri = f"{base_url}/.well-known/jwks.json"
+    login_initiation = f"{base_url}/lti/login"
 
     return {
         "application_type": "web",
         "response_types": ["id_token"],
+        # Include client_credentials for AGS/NRPS service tokens; some platforms also accept just this
         "grant_types": ["client_credentials"],
-        "initiate_login_uri": f"{base_url}/lti/login",
-        "redirect_uris": [f"{base_url}/lti/launch", deep_link_return],
-        "jwks_uri": f"{base_url}/.well-known/jwks.json",
+        # CRITICAL for Moodle & most LMSs:
+        "token_endpoint_auth_method": "private_key_jwt",
+        "initiate_login_uri": login_initiation,
+        # Only tool-owned HTTPS redirect URIs used for OIDC login → launch
+        "redirect_uris": [tool_launch],
+        "jwks_uri": jwks_uri,
         "logo_uri": f"{base_url}/static/logo.png",
-        "contacts": [cfg.get("TOOL_CONTACT_EMAIL")],
+        "contacts": contacts,
         "client_name": cfg.get("TOOL_TITLE", "Verify"),
+
+        # LTI Tool Configuration
         "https://purl.imsglobal.org/spec/lti-tool-configuration": {
+            # Some LMSs require this at the block level in addition to per-message target_link_uri
+            "target_link_uri": tool_launch,
+            "domain": urlparse(base_url).netloc,
             "claims": [
                 "https://purl.imsglobal.org/spec/lti/claim/deployment_id",
             ],
             "messages": [
                 {
                     "type": "LtiResourceLinkRequest",
-                    "target_link_uri": f"{base_url}/lti/launch",
+                    "target_link_uri": tool_launch,
                 },
                 {
                     "type": "LtiDeepLinkingRequest",
-                    "target_link_uri": f"{base_url}/lti/deep_link",
+                    "target_link_uri": deep_link_select,
                 },
             ],
         },
