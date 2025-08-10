@@ -75,9 +75,7 @@ def test_deep_link_launch_stores_return_url(client, app, monkeypatch):
     assert res.status_code == 302
     assert res.headers["Location"].endswith("/lti/deep_link")
     with client.session_transaction() as sess:
-        assert (
-            sess["deep_link_return_url"] == "https://lms.example.com/return"
-        )
+        assert sess["deep_link_return_url"] == "https://lms.example.com/return"
 
 
 def test_deep_link_return_posts_response(client, monkeypatch):
@@ -100,6 +98,9 @@ def test_deep_link_return_posts_response(client, monkeypatch):
     res = client.post("/lti/deep_link/return")
     assert res.status_code == 200
     assert called["url"] == "https://lms.example.com/return"
+
+
+# --- Additional method-acceptance tests from feature branch ---
 
 
 def test_lti_launch_accepts_get(client, app, monkeypatch):
