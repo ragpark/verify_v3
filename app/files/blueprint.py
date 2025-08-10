@@ -8,6 +8,8 @@ from flask import (
     session,
     send_from_directory,
     render_template_string,
+    redirect,
+    url_for,
 )
 from werkzeug.utils import secure_filename
 import requests
@@ -130,8 +132,21 @@ def _validate_file(file_storage) -> tuple[bool, str]:
 
 @files_bp.before_request
 def _require_session():
-    if not _ensure_lti_session():
-        return jsonify({"error": "unauthorized"}), 401
+    if _ensure_lti_session():
+        return None
+
+    # API clients that explicitly request JSON get an HTML error page
+    # instead of a JSON payload so the response is more user-friendly.
+    if request.headers.get("Accept") == "application/json":
+        html = """
+        <h1>Unauthorized</h1>
+        <p>No active LTI session. Please launch this tool from your LMS.</p>
+        """
+        return render_template_string(html), 401
+
+    # Otherwise redirect to the LTI login endpoint to re-establish session
+    # before hitting the requested URL.
+    return redirect(url_for("lti.login", target_link_uri=request.url))
 
 
 @files_bp.route("/get_user_files/<int:user_id>")
