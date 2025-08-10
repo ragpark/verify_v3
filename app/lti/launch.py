@@ -57,23 +57,24 @@ def lti_launch():
     """Handle an LTI launch by verifying the id_token."""
     # Read from form (normal Moodle) or query (after a redirect)
     id_token = request.form.get("id_token") or request.args.get("id_token")
-    state    = request.form.get("state")    or request.args.get("state")
+    state_value = request.form.get("state") or request.args.get("state")
 
-    if not id_token or not state_val:
+    if not id_token or not state_value:
         abort(400, "missing id_token or state")
 
     # Validate state
-    state = State.query.filter_by(value=state_val).first()
-    if not state or state.expires_at < datetime.utcnow():
+    state_row = State.query.filter_by(value=state_value).first()
+    if not state_row or state_row.expires_at < datetime.utcnow():
         abort(400, "invalid state")
-    redirect_after = state.redirect_after
-    db.session.delete(state)
+    redirect_after = state_row.redirect_after
+    db.session.delete(state_row)
     db.session.commit()
 
+    # Peek at JWT to get iss/aud/nonce before verifying signature
     unverified = jwt.decode(id_token, options={"verify_signature": False})
     iss = unverified.get("iss")
     aud = unverified.get("aud")
-    nonce_val = unverified.get("nonce")
+    nonce_value = unverified.get("nonce")
     if not iss:
         abort(400, "missing iss")
 
@@ -94,26 +95,27 @@ def lti_launch():
         issuer=platform.issuer,
     )
 
-    # Validate nonce
-    nonce = Nonce.query.filter_by(value=nonce_val).first()
-    if not nonce or nonce.expires_at < datetime.utcnow():
+    # Validate and consume nonce
+    nonce_row = Nonce.query.filter_by(value=nonce_value).first()
+    if not nonce_row or nonce_row.expires_at < datetime.utcnow():
         abort(400, "invalid nonce")
-    db.session.delete(nonce)
+    db.session.delete(nonce_row)
     db.session.commit()
 
+    # Upsert deployment
     deployment_id = data.get("https://purl.imsglobal.org/spec/lti/claim/deployment_id")
     if deployment_id:
-        exists = Deployment.query.filter_by(platform_id=platform.id, deployment_id=deployment_id).first()
+        exists = Deployment.query.filter_by(
+            platform_id=platform.id, deployment_id=deployment_id
+        ).first()
         if not exists:
             db.session.add(Deployment(platform_id=platform.id, deployment_id=deployment_id))
             db.session.commit()
 
+    # Deep Linking: stash return URL for the selection response
     message_type = data.get("https://purl.imsglobal.org/spec/lti/claim/message_type")
     if message_type == "LtiDeepLinkingRequest":
-        settings = data.get(
-            "https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings",
-            {},
-        )
+        settings = data.get("https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings", {})
         deep_link_return_url = settings.get("deep_link_return_url")
         if deep_link_return_url:
             session["deep_link_return_url"] = deep_link_return_url
