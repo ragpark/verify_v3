@@ -30,3 +30,7 @@ class Config:
     # Nonce/state expiry windows
     STATE_EXPIRATION = timedelta(minutes=5)
     NONCE_EXPIRATION = timedelta(minutes=5)
+
+    # Ensure session cookies work within an iframe when launched from an LMS
+    SESSION_COOKIE_SAMESITE = "None"
+    SESSION_COOKIE_SECURE = True
