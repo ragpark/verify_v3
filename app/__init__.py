@@ -7,6 +7,25 @@ from .config import Config
 # SQLAlchemy instance
 db = SQLAlchemy()
 
+@app.before_request
+def _log_incoming():
+    if request.path.startswith("/lti/"):
+        current_app.logger.info(
+            "IN %s %s ct=%s qs=%s form_keys=%s",
+            request.method, request.url,
+            request.headers.get("Content-Type"),
+            dict(request.args), list(request.form.keys()),
+        )
+
+@app.after_request
+def _log_outgoing(resp):
+    if request.path.startswith("/lti/"):
+        current_app.logger.info(
+            "OUT %s %s -> %s%s",
+            request.method, request.path, resp.status,
+            f" loc={resp.headers.get('Location')}" if 300 <= resp.status_code < 400 else ""
+        )
+    return resp
 
 def create_app(config_class: type[Config] = Config) -> Flask:
     """Application factory for the LTI tool."""
