@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Student Files</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>Student Files</h1>
+    {% if uploaded is not none %}
+    <p>{{ uploaded }} file(s) uploaded to filestore.</p>
+    {% endif %}
+    <form method="post">
+        {% for student in students %}
+        <h3>{{ student.fullname }}</h3>
+        {% if student.files %}
+        <table>
+            <tr><th>Select</th><th>Filename</th></tr>
+            {% for file in student.files %}
+            <tr>
+                <td><input type="checkbox" name="files" value="{{ file.url }}"></td>
+                <td>{{ file.filename }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No files found.</p>
+        {% endif %}
+        {% endfor %}
+        <button type="submit">Upload Selected</button>
+    </form>
+</body>
+</html>
