@@ -212,6 +212,10 @@ def lti_launch():
     session['platform_issuer'] = platform.issuer
     session['deployment_id'] = dep_id
     session['user_id'] = data.get("sub")
+    session['user_name'] = data.get("name", "Unknown User")
+    session['user_email'] = data.get("email")
+    session['context_title'] = data.get("https://purl.imsglobal.org/spec/lti/claim/context", {}).get("title")
+    session['return_url'] = data.get("https://purl.imsglobal.org/spec/lti/claim/launch_presentation", {}).get("return_url")
     
     # Handle message type specific logic
     message_type = data.get("https://purl.imsglobal.org/spec/lti/claim/message_type")
@@ -239,15 +243,20 @@ def lti_launch():
     # Log successful launch
     current_app.logger.info(f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}")
     
-    # Redirect to the original target or return success
-    if redirect_after:
-        return redirect(redirect_after)
+    # Instead of redirecting back to launch endpoint, redirect to success page
+    if message_type == "LtiResourceLinkRequest":
+        # For regular resource link requests, redirect to success landing page
+        return redirect(url_for("lti.lti_success"))
     
+    # For other message types, return JSON
     return jsonify({
         "launch": "success",
         "message_type": message_type,
         "user_id": data.get("sub"),
-        "platform": iss
+        "platform": iss,
+        "user_name": data.get("name"),
+        "context": data.get("https://purl.imsglobal.org/spec/lti/claim/context", {}).get("title"),
+        "return_url": data.get("https://purl.imsglobal.org/spec/lti/claim/launch_presentation", {}).get("return_url")
     })
 
 
@@ -543,3 +552,46 @@ def test_endpoint():
     }
     print(f"Response data: {response_data}")
     return jsonify(response_data)
+
+
+@bp.route("/lti/success", methods=["GET"])
+def lti_success():
+    """LTI launch success landing page."""
+    user_name = session.get('user_name', 'User')
+    platform = session.get('platform_issuer', 'Unknown Platform')
+    
+    return f"""
+    <html>
+    <head>
+        <title>LTI Launch Successful</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            .container {{ background: white; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; }}
+            .success {{ color: #28a745; font-size: 24px; margin-bottom: 20px; }}
+            .info {{ background: #e9ecef; padding: 15px; border-radius: 4px; margin: 10px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="success">✅ LTI Launch Successful!</div>
+            <p>Welcome <strong>{user_name}</strong> from <strong>{platform}</strong></p>
+            
+            <div class="info">
+                <h3>Available Actions:</h3>
+                <ul>
+                    <li><a href="/files">File Browser</a> - View and manage uploaded files</li>
+                    <li><a href="/lti/debug/config">Debug Config</a> - View LTI configuration</li>
+                    <li><a href="/lti/health">Health Check</a> - System status</li>
+                </ul>
+            </div>
+            
+            <div class="info">
+                <strong>Session Info:</strong><br>
+                Platform: {session.get('platform_issuer', 'N/A')}<br>
+                User ID: {session.get('user_id', 'N/A')}<br>
+                Deployment: {session.get('deployment_id', 'N/A')}
+            </div>
+        </div>
+    </body>
+    </html>
+    """
