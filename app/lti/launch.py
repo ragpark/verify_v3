@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import jwt
 import requests
-from flask import Blueprint, abort, current_app, jsonify, redirect, request, session, url_for
+from flask import Blueprint, abort, current_app, jsonify, redirect, request, session, url_for, render_template
 
 from .. import db
 from ..models import Deployment, Nonce, Platform, State
@@ -580,6 +580,7 @@ def lti_success():
                 <h3>Available Actions:</h3>
                 <ul>
                     <li><a href="/files">File Browser</a> - View and manage uploaded files</li>
+                    <li><a href="/lti/student_files">Student Files</a> - Browse Moodle student uploads</li>
                     <li><a href="/lti/debug/config">Debug Config</a> - View LTI configuration</li>
                     <li><a href="/lti/health">Health Check</a> - System status</li>
                 </ul>
@@ -595,3 +596,90 @@ def lti_success():
     </body>
     </html>
     """
+
+
+def _fetch_moodle_students_and_files():
+    """Return a list of student users and their files from Moodle."""
+    base_url = current_app.config.get("MOODLE_BASE_URL") or os.getenv("MOODLE_BASE_URL")
+    token = current_app.config.get("MOODLE_TOKEN") or os.getenv("MOODLE_TOKEN")
+    course_id = current_app.config.get("MOODLE_COURSE_ID") or os.getenv("MOODLE_COURSE_ID")
+    if not base_url or not token or not course_id:
+        current_app.logger.warning("Missing Moodle configuration; unable to fetch students")
+        return []
+
+    params = {
+        "wstoken": token,
+        "wsfunction": "core_enrol_get_enrolled_users",
+        "courseid": course_id,
+        "moodlewsrestformat": "json",
+    }
+    try:
+        resp = requests.get(f"{base_url}/webservice/rest/server.php", params=params, timeout=10)
+        resp.raise_for_status()
+        users = resp.json()
+    except Exception as err:  # pragma: no cover - network errors
+        current_app.logger.error(f"Failed to fetch Moodle users: {err}")
+        return []
+
+    students = []
+    for user in users:
+        roles = [r.get("shortname") for r in user.get("roles", [])]
+        if "student" not in roles:
+            continue
+
+        file_params = {
+            "wstoken": token,
+            "wsfunction": "core_files_get_user_files",
+            "userid": user.get("id"),
+            "moodlewsrestformat": "json",
+        }
+        files = []
+        try:
+            f_resp = requests.get(
+                f"{base_url}/webservice/rest/server.php", params=file_params, timeout=10
+            )
+            f_resp.raise_for_status()
+            for f in f_resp.json().get("files", []):
+                if f.get("isdir"):
+                    continue
+                url = f.get("fileurl")
+                if url:
+                    # Append token so admin can download directly
+                    files.append(
+                        {
+                            "filename": f.get("filename"),
+                            "url": f"{url}?token={token}",
+                        }
+                    )
+        except Exception as err:  # pragma: no cover
+            current_app.logger.error(
+                f"Failed to fetch files for user {user.get('id')}: {err}"
+            )
+
+        students.append({"fullname": user.get("fullname"), "files": files})
+
+    return students
+
+
+@bp.route("/lti/student_files", methods=["GET", "POST"])
+def student_files():
+    """Display Moodle students and allow uploading their files to local storage."""
+    uploaded = None
+    if request.method == "POST":
+        selected = request.form.getlist("files")
+        upload_dir = current_app.config.get("UPLOAD_FOLDER", "/tmp/lti_files")
+        os.makedirs(upload_dir, exist_ok=True)
+        uploaded = 0
+        for file_url in selected:
+            try:
+                resp = requests.get(file_url, timeout=10)
+                resp.raise_for_status()
+                filename = file_url.rsplit("/", 1)[-1].split("?")[0]
+                with open(os.path.join(upload_dir, filename), "wb") as handle:
+                    handle.write(resp.content)
+                uploaded += 1
+            except Exception as err:  # pragma: no cover
+                current_app.logger.error(f"Failed to download {file_url}: {err}")
+
+    students = _fetch_moodle_students_and_files()
+    return render_template("student_files.html", students=students, uploaded=uploaded)
