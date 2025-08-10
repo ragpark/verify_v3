@@ -43,6 +43,7 @@ def login():
     state_val = secrets.token_urlsafe(32)
     nonce_val = secrets.token_urlsafe(32)
     expires = datetime.utcnow() + current_app.config.get("STATE_EXPIRATION", datetime.timedelta(minutes=5))
+    expires = datetime.utcnow() + current_app.config.get("STATE_EXPIRATION", timedelta(minutes=5))
     
     # Store state and nonce in database
     db.session.add(State(value=state_val, redirect_after=target_link_uri, expires_at=expires))
