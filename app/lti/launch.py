@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import jwt
@@ -286,18 +286,16 @@ def deep_link_return():
         "https://purl.imsglobal.org/spec/lti/claim/deployment_id": session.get('deployment_id')
     }
     
-    # TODO: You need to implement proper JWT signing here
-    # This requires your tool's private key for signing
-    # For now, this will fail - you need to add proper key management
+    # Sign the JWT with your tool's private key
     try:
-        # You need to get your tool's private key here
-        # private_key = get_tool_private_key()  # Implement this function
-        # jwt_token = jwt.encode(payload, private_key, algorithm="RS256")
+        private_key = current_app.config.get('TOOL_PRIVATE_KEY')
+        if not private_key:
+            return _fail("Tool private key not configured")
         
-        # Temporary placeholder - REPLACE WITH PROPER SIGNING
-        jwt_token = "PLACEHOLDER_JWT_NEEDS_PROPER_SIGNING"
+        # Sign the JWT with your private key
+        jwt_token = jwt.encode(payload, private_key, algorithm="RS256")
         
-        current_app.logger.warning("Using placeholder JWT - implement proper signing!")
+        current_app.logger.info("Deep linking JWT signed successfully")
         
         # Post the response back to the LMS
         response_data = {"JWT": jwt_token}
