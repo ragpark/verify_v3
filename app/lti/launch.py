@@ -29,8 +29,19 @@ def _fail(reason: str, code: int = 400):
 @bp.route("/lti/login", methods=["GET", "POST"], strict_slashes=False)
 def login():
     """Initiate OIDC login flow."""
+    # IMMEDIATE DEBUG - Print to console AND log
+    print("=" * 50)
+    print("LTI LOGIN ENDPOINT HIT!")
+    print(f"Method: {request.method}")
+    print(f"URL: {request.url}")
+    print(f"Remote addr: {request.remote_addr}")
+    print(f"User agent: {request.headers.get('User-Agent', 'NONE')}")
+    print(f"Args: {dict(request.args)}")
+    print(f"Form: {dict(request.form)}")
+    print("=" * 50)
+    
     # Debug: Log all incoming parameters
-    current_app.logger.info(f"Login request method: {request.method}")
+    current_app.logger.info(f"LOGIN ENDPOINT HIT - Method: {request.method}")
     current_app.logger.info(f"Login request args: {dict(request.args)}")
     current_app.logger.info(f"Login request form: {dict(request.form)}")
     current_app.logger.info(f"Login request headers: {dict(request.headers)}")
@@ -426,5 +437,19 @@ def health():
             "deep_link": url_for("lti.deep_link", _external=True)
         },
         "debug_mode": LTI_DEBUG,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+
+@bp.route("/lti/test", methods=["GET", "POST"])
+def test_endpoint():
+    """Simple test endpoint to verify server is reachable."""
+    print("TEST ENDPOINT HIT!")
+    return jsonify({
+        "message": "LTI endpoints are working!",
+        "method": request.method,
+        "url": request.url,
+        "args": dict(request.args),
+        "form": dict(request.form),
         "timestamp": datetime.utcnow().isoformat()
     })
