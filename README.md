@@ -1,20 +1,22 @@
-# LTI File Manager for Moodle
+# Verify LTI Tool
 
-This project provides a Flask-based [LTI 1.3](https://www.imsglobal.org/spec/lti/v1p3/) tool that lets Moodle administrators browse and copy learner files from a course and upload new content to a server-side storage location. Files are stored on the application server for further processing or transfer to another storage facility.
+This project provides a Flask based [LTI 1.3](https://www.imsglobal.org/spec/lti/v1p3/) application that exposes a minimal file
+manager together with [Dynamic Registration](https://www.imsglobal.org/spec/lti-dynamic/v1p0/) so learning management systems
+(LMSs) can install the tool without manual key exchange. Files are stored on the application server for further processing or
+transfer to another storage facility.
 
 ## Features
 
-- OIDC login and LTI 1.3 launch endpoints for secure integration with Moodle.
-- REST API helpers for calling Moodle's web services.
-- Copy learner files from Moodle into a local upload directory.
-- Upload new files from the browser to the server.
+- OIDC login and LTI 1.3 launch endpoints.
+- Dynamic Registration so admins only need a single URL.
+- Deep linking to allow teachers to choose resources at placement time.
 - JWKS and tool configuration endpoints to simplify external tool setup.
-- Lightweight in-memory metadata store (replace with a database in production).
+- Simple file browser for testing and legacy workflows.
 
 ## Requirements
 
 - Python 3.10+
-- Dependencies listed in `requirements.txt` (`Flask`, `PyJWT`, `cryptography`, `requests`, `Werkzeug`).
+- Dependencies listed in `requirements.txt`.
 
 Install dependencies with:
 
@@ -24,14 +26,15 @@ pip install -r requirements.txt
 
 ## Configuration
 
-The application is configured through environment variables:
+Key environment variables:
 
+- `DATABASE_URL` – PostgreSQL URL provided by Railway (required).
+- `APP_BASE_URL` – External base URL of the deployed app.
+- `TOOL_TITLE`, `TOOL_DESCRIPTION`, `TOOL_CONTACT_EMAIL` – Metadata displayed to LMS admins.
+- `DEEP_LINK_RETURN_URL` – Optional override for the deep-link return endpoint.
 - `SECRET_KEY` – Flask session secret.
-- `LTI_CLIENT_ID`, `LTI_DEPLOYMENT_ID`, `LTI_ISSUER`, `LTI_AUTH_LOGIN_URL`, `LTI_AUTH_TOKEN_URL`, `LTI_KEY_SET_URL` – LTI 1.3 platform details from Moodle.
-- `MOODLE_URL`, `MOODLE_API_TOKEN`, `MOODLE_SERVICE` – Moodle REST API settings.
-- `PRIVATE_KEY_PEM`/`PUBLIC_KEY_PEM` or `PRIVATE_KEY_B64`/`PUBLIC_KEY_B64` – RSA keys for signing JWTs. If not supplied, a key pair is generated at startup.
 
-File uploads are stored in `/tmp/lti_files`; adjust `UPLOAD_FOLDER` in `app.py` for a persistent storage location.
+File uploads are stored in `/tmp/lti_files`; adjust `UPLOAD_FOLDER` if a different location is needed.
 
 ## Running the Tool
 
@@ -41,37 +44,33 @@ python app.py
 
 By default the server listens on port `5000`.
 
-## Moodle Integration
+## Dynamic Registration
 
-1. Deploy the server so Moodle can reach it.
-2. In Moodle, create an LTI 1.3 external tool and provide the URL `https://<your-tool-domain>/config.json` to import configuration automatically.
-3. Complete the external tool setup using the generated public key endpoint at `https://<your-tool-domain>/.well-known/jwks.json`.
-4. Launch the tool from a course. Administrators will see a file browser where they can:
-   - Retrieve a learner's existing Moodle files.
-   - Copy selected Moodle files into the tool's upload directory.
-   - Upload new files from their local machine.
+Dynamic Registration lets an LMS discover the tool configuration and key set automatically.
 
-Uploaded or copied files can be inspected at `https://<your-tool-domain>/files` or via the JSON API at `/list_uploaded_files`.
+1. Deploy the server with `APP_BASE_URL` set to the externally reachable URL (e.g. the Railway URL).
+2. Visit `https://<APP_BASE_URL>/lti/dynamic-registration` to copy the Registration URL.
+3. Paste this URL into the LMS's "Dynamic Registration" or "Registration URL" field.
+4. The LMS will call the URL with the required parameters. The tool will register itself and show a success page listing the
+   new platform. Teachers can then add the tool to courses via deep linking.
+
+The tool also exposes:
+
+- `https://<APP_BASE_URL>/.well-known/tool-configuration` – metadata describing the tool.
+- `https://<APP_BASE_URL>/.well-known/jwks.json` – public keys for JWT signature verification.
 
 ## API Endpoints
 
-- `GET /get_user_files/<user_id>?course_id=<course>` – fetch a learner's Moodle files.
-- `POST /copy_moodle_files` – copy selected Moodle files into the upload directory.
-- `POST /upload_files` – upload new files from the browser.
-- `GET /download_file/<file_id>` – placeholder download endpoint.
-- `DELETE /delete_file/<file_id>` – placeholder delete endpoint.
+- `GET /.well-known/tool-configuration` – JSON metadata for Dynamic Registration.
+- `GET /.well-known/jwks.json` – public keys for verifying JWTs.
+- `GET /files` – basic file browser UI.
 - `GET /list_uploaded_files` – JSON list of files stored on the server.
-- `GET /.well-known/jwks.json` – public keys for Moodle to verify JWTs.
-- `GET /config.json` – LTI tool configuration.
 
 ## Development & Debugging
 
 Useful helper routes:
 
-- `GET /test_session` – inspect session contents.
-- `GET /test_moodle_api` – verify Moodle API connectivity.
 - `GET /debug_routes` – list all registered routes.
-- `GET /launch_test` – launch the interface with mock LTI data.
 - `GET /health` – basic health check.
 
 ## Notes
