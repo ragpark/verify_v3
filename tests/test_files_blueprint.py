@@ -2,11 +2,13 @@ import os
 import sys
 from urllib.parse import parse_qs, urlparse
 
+
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app import create_app, db
 from app.models import Platform
+
 
 
 @pytest.fixture()
@@ -24,6 +26,7 @@ def app():
             )
         )
         db.session.commit()
+
         yield app
         db.session.remove()
         db.drop_all()
@@ -41,6 +44,7 @@ def test_require_session_redirects_to_login(client):
     assert "/lti/login" in location
     qs = parse_qs(urlparse(location).query)
     assert qs.get("iss") == ["https://lms.example.com"]
+
 
 
 def test_require_session_returns_html_error(client):
