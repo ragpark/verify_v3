@@ -12,9 +12,6 @@ from flask import Blueprint, abort, current_app, jsonify, redirect, request, ses
 from .. import db
 from ..models import Deployment, Nonce, Platform, State
 
-bp = Blueprint("launch", __name__)
-
-
 @bp.route("/lti/login", methods=["GET", "POST"], strict_slashes=False)
 def login():
     """Initiate OIDC login flow."""
