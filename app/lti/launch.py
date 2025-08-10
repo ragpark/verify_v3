@@ -18,6 +18,7 @@ bp = Blueprint("launch", __name__)
 @bp.route("/lti/login", methods=["GET", "POST"], strict_slashes=False)
 def login():
     """Initiate OIDC login flow."""
+    from urllib.parse import urlencode
     iss = request.values.get("iss")
     target_link_uri = request.values.get("target_link_uri")
     if not iss or not target_link_uri:
@@ -37,6 +38,7 @@ def login():
     params = {
         "scope": "openid",
         "response_type": "id_token",
+        "response_mode": "form_post",
         "client_id": platform.client_id,
         "redirect_uri": url_for("launch.lti_launch", _external=True),
         "login_hint": request.values.get("login_hint", ""),
