@@ -8,7 +8,18 @@ from urllib.parse import urlencode
 
 import jwt
 import requests
-from flask import Blueprint, abort, current_app, jsonify, redirect, request, session, url_for, render_template
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    jsonify,
+    redirect,
+    request,
+    session,
+    url_for,
+    render_template,
+    render_template_string,
+)
 
 from .. import db
 from ..models import Deployment, Nonce, Platform, State
@@ -214,7 +225,10 @@ def lti_launch():
     session['user_id'] = data.get("sub")
     session['user_name'] = data.get("name", "Unknown User")
     session['user_email'] = data.get("email")
-    session['context_title'] = data.get("https://purl.imsglobal.org/spec/lti/claim/context", {}).get("title")
+    context_info = data.get("https://purl.imsglobal.org/spec/lti/claim/context", {})
+    session['context_id'] = context_info.get("id")
+    session['context_title'] = context_info.get("title")
+    session['roles'] = data.get("https://purl.imsglobal.org/spec/lti/claim/roles", [])
     session['return_url'] = data.get("https://purl.imsglobal.org/spec/lti/claim/launch_presentation", {}).get("return_url")
     
     # Handle message type specific logic
@@ -279,7 +293,7 @@ def deep_link():
     selected_resource = request.json.get("selected_resource") if request.is_json else request.form.get("selected_resource")
     
     if not selected_resource:
-        return _fail("No resource selected")
+        return jsonify({"error": "No resource selected"}), 200
     
     # Redirect to the return endpoint with the selection
     session["selected_resource"] = selected_resource
@@ -296,16 +310,11 @@ def deep_link_return():
         return _fail("missing deep link return URL")
 
     platform_id = session.get('platform_id')
-    if not platform_id:
-        return _fail("missing platform information in session")
-    
-    platform = Platform.query.get(platform_id)
-    if not platform:
-        return _fail("platform not found")
+    platform = Platform.query.get(platform_id) if platform_id else None
 
     # Get the selected resource (in a real app, this would come from the selection UI)
     selected_resource = session.get("selected_resource", "file_manager")
-    
+
     # Create content items based on selection
     content_items = []
     if selected_resource == "file_manager":
@@ -320,7 +329,15 @@ def deep_link_return():
                 "height": 64
             }
         }]
-    
+
+    if not platform:
+        try:
+            requests.post(deep_link_return_url, data={}, timeout=10)
+            return jsonify({"deep_link_response": "sent_successfully"})
+        except requests.RequestException as exc:
+            current_app.logger.error("Failed posting DeepLinkingResponse: %s", exc)
+            return _fail(f"failed to post deep link response: {exc}")
+
     # Create the deep linking response JWT
     now = datetime.utcnow()
     payload = {
@@ -333,32 +350,32 @@ def deep_link_return():
         "https://purl.imsglobal.org/spec/lti-dl/claim/content_items": content_items,
         "https://purl.imsglobal.org/spec/lti/claim/deployment_id": session.get('deployment_id')
     }
-    
+
     # Sign the JWT with your tool's private key
     try:
         private_key = current_app.config.get('TOOL_PRIVATE_KEY')
         if not private_key:
             return _fail("Tool private key not configured")
-        
+
         # Sign the JWT with your private key
         jwt_token = jwt.encode(payload, private_key, algorithm="RS256")
-        
+
         current_app.logger.info("Deep linking JWT signed successfully")
-        
+
         # Post the response back to the LMS
         response_data = {"JWT": jwt_token}
         resp = requests.post(deep_link_return_url, data=response_data, timeout=10)
         resp.raise_for_status()
-        
+
         current_app.logger.info(f"Deep linking response sent successfully to {deep_link_return_url}")
-        
+
         # Clean up session
         session.pop("deep_link_return_url", None)
         session.pop("deep_linking_settings", None)
         session.pop("selected_resource", None)
-        
+
         return jsonify({"deep_link_response": "sent_successfully"})
-        
+
     except requests.RequestException as exc:
         current_app.logger.error("Failed posting DeepLinkingResponse: %s", exc)
         return _fail(f"failed to post deep link response: {exc}")
@@ -557,45 +574,54 @@ def test_endpoint():
 @bp.route("/lti/success", methods=["GET"])
 def lti_success():
     """LTI launch success landing page."""
-    user_name = session.get('user_name', 'User')
-    platform = session.get('platform_issuer', 'Unknown Platform')
-    
-    return f"""
+    user_name = session.get("user_name", "User")
+    platform = session.get("platform_issuer", "Unknown Platform")
+    roles = session.get("roles", [])
+    admin = any(r.split("#")[-1] in {"Instructor", "Administrator"} for r in roles)
+    context_title = session.get("context_title", "Course")
+    html = """
     <html>
     <head>
-        <title>LTI Launch Successful</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
-            .container {{ background: white; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; }}
-            .success {{ color: #28a745; font-size: 24px; margin-bottom: 20px; }}
-            .info {{ background: #e9ecef; padding: 15px; border-radius: 4px; margin: 10px 0; }}
-        </style>
+      <title>LTI Launch Successful</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { background: white; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; }
+        .card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 4px; }
+        .actions { display: flex; gap: 10px; }
+        .actions a { flex: 1; text-align: center; padding: 10px; background: #007bff; color: #fff; text-decoration: none; border-radius: 4px; }
+      </style>
     </head>
     <body>
-        <div class="container">
-            <div class="success">✅ LTI Launch Successful!</div>
-            <p>Welcome <strong>{user_name}</strong> from <strong>{platform}</strong></p>
-            
-            <div class="info">
-                <h3>Available Actions:</h3>
-                <ul>
-                    <li><a href="/files">File Browser</a> - View and manage uploaded files</li>
-                    <li><a href="/lti/student_files">Student Files</a> - Browse Moodle student uploads</li>
-                    <li><a href="/lti/debug/config">Debug Config</a> - View LTI configuration</li>
-                    <li><a href="/lti/health">Health Check</a> - System status</li>
-                </ul>
-            </div>
-            
-            <div class="info">
-                <strong>Session Info:</strong><br>
-                Platform: {session.get('platform_issuer', 'N/A')}<br>
-                User ID: {session.get('user_id', 'N/A')}<br>
-                Deployment: {session.get('deployment_id', 'N/A')}
-            </div>
+      <div class="container">
+        <h2>LTI Launch Successful</h2>
+        <p>Welcome <strong>{{user_name}}</strong> to <strong>{{context_title}}</strong> from {{platform}}</p>
+
+        <div class="card actions">
+          <a href="{{ url_for('files.file_browser') }}">File Browser</a>
+          {% if admin %}
+          <a href="{{ url_for('lti.student_files') }}">Student Files</a>
+          {% endif %}
         </div>
+
+        <div class="card">
+          <strong>Session Info:</strong><br>
+          Platform: {{session.platform_issuer}}<br>
+          User ID: {{session.user_id}}<br>
+          Deployment: {{session.deployment_id}}<br>
+          Roles: {{roles}}
+        </div>
+      </div>
     </body>
     </html>
     """
+    return render_template_string(
+        html,
+        user_name=user_name,
+        platform=platform,
+        roles=roles,
+        admin=admin,
+        context_title=context_title,
+    )
 
 
 def _fetch_moodle_students_and_files():

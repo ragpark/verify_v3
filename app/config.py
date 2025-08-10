@@ -23,6 +23,9 @@ class Config:
     )
 
     UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/tmp/lti_files")
+    MAX_FILE_SIZE = int(os.environ.get("MAX_FILE_SIZE", 16_777_216))
+    MOODLE_URL = os.environ.get("MOODLE_URL")
+    MOODLE_API_TOKEN = os.environ.get("MOODLE_API_TOKEN")
 
     # Nonce/state expiry windows
     STATE_EXPIRATION = timedelta(minutes=5)

@@ -1,6 +1,7 @@
 from flask import Flask, request, current_app
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.middleware.proxy_fix import ProxyFix
+import os
 
 from .config import Config
 
@@ -55,11 +56,17 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     from .lti.jwks import bp as jwks_bp
     from .lti.launch import bp as launch_bp
     from .legacy import bp as legacy_bp
+    from .files import files_bp
 
     app.register_blueprint(registration_bp)
     app.register_blueprint(jwks_bp)
     app.register_blueprint(launch_bp)
     app.register_blueprint(legacy_bp)
+    app.register_blueprint(files_bp, url_prefix="/files")
+
+    # Ensure upload directory exists
+    upload_dir = os.getenv("UPLOAD_FOLDER", "/tmp/lti_files")
+    os.makedirs(upload_dir, exist_ok=True)
 
     # Useful once at startup to confirm routes/methods (look for /lti/* with POST)
     app.logger.info("URL MAP: %s", app.url_map)
