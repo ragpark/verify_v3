@@ -81,17 +81,17 @@ def _tool_configuration() -> dict:
     }
 
 
-@bp.get("/.well-known/tool-configuration")
+@bp.route("/.well-known/tool-configuration", methods=["GET", "POST"])
 def tool_configuration():
     """Expose tool configuration metadata for dynamic registration."""
     return jsonify(_tool_configuration())
 
 
-@bp.get("/lti/dynamic-registration")
+@bp.route("/lti/dynamic-registration", methods=["GET", "POST"])
 def dynamic_registration():
     """Display registration URL or handle incoming LMS call."""
-    openid_config = request.args.get("openid_configuration")
-    registration_token = request.args.get("registration_token")
+    openid_config = request.values.get("openid_configuration")
+    registration_token = request.values.get("registration_token")
 
     if openid_config and registration_token:
         # LMS initiated call; create state and redirect to callback
@@ -115,12 +115,12 @@ def dynamic_registration():
     return render_template("admin/registration.html", registration_url=registration_url)
 
 
-@bp.get("/lti/dynamic-registration/callback")
+@bp.route("/lti/dynamic-registration/callback", methods=["GET", "POST"])
 def dynamic_registration_callback():
     """Handle the dynamic registration flow."""
-    openid_config = request.args.get("openid_configuration")
-    registration_token = request.args.get("registration_token")
-    state_value = request.args.get("state")
+    openid_config = request.values.get("openid_configuration")
+    registration_token = request.values.get("registration_token")
+    state_value = request.values.get("state")
 
     if not all([openid_config, registration_token, state_value]):
         abort(400, "missing required parameters")
@@ -188,7 +188,7 @@ def dynamic_registration_callback():
     return render_template("admin/registration_success.html", platform=platform)
 
 
-@bp.get("/admin/registration")
+@bp.route("/admin/registration", methods=["GET", "POST"])
 def admin_registration():
     """Admin page showing the registration URL."""
     registration_url = url_for("registration.dynamic_registration", _external=True)

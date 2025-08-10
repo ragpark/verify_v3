@@ -15,11 +15,11 @@ from ..models import Deployment, Nonce, Platform, State
 bp = Blueprint("launch", __name__)
 
 
-@bp.get("/lti/login")
+@bp.route("/lti/login", methods=["GET", "POST"])
 def login():
     """Initiate OIDC login flow."""
-    iss = request.args.get("iss")
-    target_link_uri = request.args.get("target_link_uri")
+    iss = request.values.get("iss")
+    target_link_uri = request.values.get("target_link_uri")
     if not iss or not target_link_uri:
         abort(400, "missing parameters")
 
@@ -39,22 +39,22 @@ def login():
         "response_type": "id_token",
         "client_id": platform.client_id,
         "redirect_uri": url_for("launch.lti_launch", _external=True),
-        "login_hint": request.args.get("login_hint", ""),
+        "login_hint": request.values.get("login_hint", ""),
         "state": state_val,
         "nonce": nonce_val,
     }
     # Optional lti_message_hint support
-    if request.args.get("lti_message_hint"):
-        params["lti_message_hint"] = request.args["lti_message_hint"]
+    if request.values.get("lti_message_hint"):
+        params["lti_message_hint"] = request.values["lti_message_hint"]
 
     return redirect(f"{platform.auth_login_url}?{urlencode(params)}")
 
 
-@bp.post("/lti/launch")
+@bp.route("/lti/launch", methods=["GET", "POST"])
 def lti_launch():
     """Handle an LTI launch by verifying the id_token."""
-    id_token = request.form.get("id_token")
-    state_val = request.form.get("state")
+    id_token = request.values.get("id_token")
+    state_val = request.values.get("state")
     if not id_token or not state_val:
         abort(400, "missing id_token or state")
 
@@ -120,13 +120,14 @@ def lti_launch():
     return jsonify({"launch": "ok"})
 
 
-@bp.get("/lti/deep_link")
+
+@bp.route("/lti/deep_link", methods=["GET", "POST"])
 def deep_link():
     """Simple placeholder for deep link selection UI."""
     return jsonify({"deep_link": "ready"})
 
 
-@bp.post("/lti/deep_link/return")
+@bp.route("/lti/deep_link/return", methods=["GET", "POST"])
 def deep_link_return():
     """POST a DeepLinkingResponse to the stored return URL."""
     deep_link_return_url = session.get("deep_link_return_url") or current_app.config.get(

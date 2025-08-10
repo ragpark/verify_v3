@@ -53,7 +53,7 @@ def _generate_tool_key() -> ToolKey:
     return tool_key
 
 
-@bp.get("/.well-known/jwks.json")
+@bp.route("/.well-known/jwks.json", methods=["GET", "POST"])
 def jwks():
     """Return the active JSON Web Key Set.
 
