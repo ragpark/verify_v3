@@ -20,7 +20,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     app.config.setdefault("PREFERRED_URL_SCHEME", "https")
     app.config.setdefault("SESSION_COOKIE_SECURE", True)
     app.config.setdefault("REMEMBER_COOKIE_SECURE", True)
-    app.config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+    app.config.setdefault("SESSION_COOKIE_SAMESITE", "None")
 
     db.init_app(app)
 
