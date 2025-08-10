@@ -15,7 +15,7 @@ from ..models import Deployment, Nonce, Platform, State
 bp = Blueprint("launch", __name__)
 
 
-@bp.route("/lti/login", methods=["GET", "POST"])
+@bp.route("/lti/login", methods=["GET", "POST"], strict_slashes=False)
 def login():
     """Initiate OIDC login flow."""
     iss = request.values.get("iss")
@@ -50,11 +50,13 @@ def login():
     return redirect(f"{platform.auth_login_url}?{urlencode(params)}")
 
 
-@bp.route("/lti/launch", methods=["GET", "POST"])
+@bp.route("/lti/launch", methods=["GET", "POST"], strict_slashes=False)
 def lti_launch():
     """Handle an LTI launch by verifying the id_token."""
-    id_token = request.values.get("id_token")
-    state_val = request.values.get("state")
+    # Read from form (normal Moodle) or query (after a redirect)
+    id_token = request.form.get("id_token") or request.args.get("id_token")
+    state    = request.form.get("state")    or request.args.get("state")
+
     if not id_token or not state_val:
         abort(400, "missing id_token or state")
 
@@ -121,13 +123,13 @@ def lti_launch():
 
 
 
-@bp.route("/lti/deep_link", methods=["GET", "POST"])
+@bp.route("/lti/deep_link", methods=["GET", "POST"], strict_slashes=False)
 def deep_link():
     """Simple placeholder for deep link selection UI."""
     return jsonify({"deep_link": "ready"})
 
 
-@bp.route("/lti/deep_link/return", methods=["GET", "POST"])
+@bp.route("/lti/deep_link/return", methods=["GET", "POST"], strict_slashes=False)
 def deep_link_return():
     """POST a DeepLinkingResponse to the stored return URL."""
     deep_link_return_url = session.get("deep_link_return_url") or current_app.config.get(
