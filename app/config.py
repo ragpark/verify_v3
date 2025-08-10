@@ -14,7 +14,7 @@ class Config:
 
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret")
 
-    APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost")
+    APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://localhost")
     TOOL_TITLE = os.environ.get("TOOL_TITLE", "Verify")
     TOOL_DESCRIPTION = os.environ.get("TOOL_DESCRIPTION", "LTI Tool")
     TOOL_CONTACT_EMAIL = os.environ.get("TOOL_CONTACT_EMAIL", "support@example.com")
