@@ -70,6 +70,7 @@ def _fail(reason: str, code: int = 400):
     abort(code, reason)
 
 @bp.route("/lti/launch", methods=["POST", "GET"], strict_slashes=False)
+@bp.route("/lti/launch/", methods=["POST", "GET"], strict_slashes=False)
 def lti_launch():
     # Accept POST (normal) and GET (in case a proxy rewrote it)
     id_token = request.form.get("id_token") or request.args.get("id_token")
@@ -149,12 +150,14 @@ def lti_launch():
     return jsonify({"launch": "ok"})
 
 @bp.route("/lti/deep_link", methods=["GET", "POST"], strict_slashes=False)
+@bp.route("/lti/deep_link/", methods=["GET", "POST"], strict_slashes=False)
 def deep_link():
     """Simple placeholder for deep link selection UI."""
     return jsonify({"deep_link": "ready"})
 
 
 @bp.route("/lti/deep_link/return", methods=["GET", "POST"], strict_slashes=False)
+@bp.route("/lti/deep_link/return/", methods=["GET", "POST"], strict_slashes=False)
 def deep_link_return():
     """POST a DeepLinkingResponse to the stored return URL."""
     deep_link_return_url = session.get("deep_link_return_url") or current_app.config.get(
