@@ -6,7 +6,8 @@ from datetime import datetime
 from urllib.parse import urlencode
 
 import jwt
-from flask import Blueprint, abort, current_app, jsonify, redirect, request, url_for
+import requests
+from flask import Blueprint, abort, current_app, jsonify, redirect, request, session, url_for
 
 from .. import db
 from ..models import Deployment, Nonce, Platform, State
@@ -61,6 +62,7 @@ def lti_launch():
     state = State.query.filter_by(value=state_val).first()
     if not state or state.expires_at < datetime.utcnow():
         abort(400, "invalid state")
+    redirect_after = state.redirect_after
     db.session.delete(state)
     db.session.commit()
 
@@ -102,4 +104,42 @@ def lti_launch():
             db.session.add(Deployment(platform_id=platform.id, deployment_id=deployment_id))
             db.session.commit()
 
+    message_type = data.get("https://purl.imsglobal.org/spec/lti/claim/message_type")
+    if message_type == "LtiDeepLinkingRequest":
+        settings = data.get(
+            "https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings",
+            {},
+        )
+        deep_link_return_url = settings.get("deep_link_return_url")
+        if deep_link_return_url:
+            session["deep_link_return_url"] = deep_link_return_url
+
+    if redirect_after:
+        return redirect(redirect_after)
+
     return jsonify({"launch": "ok"})
+
+
+@bp.get("/lti/deep_link")
+def deep_link():
+    """Simple placeholder for deep link selection UI."""
+    return jsonify({"deep_link": "ready"})
+
+
+@bp.post("/lti/deep_link/return")
+def deep_link_return():
+    """POST a DeepLinkingResponse to the stored return URL."""
+    deep_link_return_url = session.get("deep_link_return_url") or current_app.config.get(
+        "DEEP_LINK_RETURN_URL"
+    )
+    if not deep_link_return_url:
+        abort(400, "missing deep link return URL")
+
+    try:
+        resp = requests.post(deep_link_return_url, data={"JWT": "placeholder"}, timeout=10)
+        resp.raise_for_status()
+    except Exception as exc:  # pragma: no cover - network failure
+        current_app.logger.error("Failed posting DeepLinkingResponse: %s", exc)
+        abort(400, "failed to post deep link response")
+
+    return jsonify({"deep_link_response": "sent"})

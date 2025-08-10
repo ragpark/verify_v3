@@ -31,7 +31,8 @@ Key environment variables:
 - `DATABASE_URL` – PostgreSQL URL provided by Railway (required).
 - `APP_BASE_URL` – External base URL of the deployed app.
 - `TOOL_TITLE`, `TOOL_DESCRIPTION`, `TOOL_CONTACT_EMAIL` – Metadata displayed to LMS admins.
-- `DEEP_LINK_RETURN_URL` – Optional override for the deep-link return endpoint.
+- `DEEP_LINK_RETURN_URL` – Optional fallback for the deep-link return endpoint (normally
+  provided by the launch claim).
 - `SECRET_KEY` – Flask session secret.
 
 File uploads are stored in `/tmp/lti_files`; adjust `UPLOAD_FOLDER` if a different location is needed.
