@@ -13,6 +13,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 import requests
+from ..models import Platform
 
 files_bp = Blueprint("files", __name__)
 
@@ -145,7 +146,17 @@ def _require_session():
         return render_template_string(html), 401
 
     # Otherwise redirect to the LTI login endpoint to re-establish session
-    # before hitting the requested URL.
+    # before hitting the requested URL. Include the platform issuer so the
+    # login handler knows which registration to use.
+    platform = Platform.query.first()
+    if platform:
+        return redirect(
+            url_for(
+                "lti.login",
+                target_link_uri=request.url,
+                iss=platform.issuer,
+            )
+        )
     return redirect(url_for("lti.login", target_link_uri=request.url))
 
 
