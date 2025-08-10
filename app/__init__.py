@@ -7,6 +7,9 @@ from .config import Config
 # SQLAlchemy instance
 db = SQLAlchemy()
 
+
+
+def create_app(config_class: type[Config] = Config) -> Flask:
 @app.before_request
 def _log_incoming():
     if request.path.startswith("/lti/"):
@@ -26,8 +29,6 @@ def _log_outgoing(resp):
             f" loc={resp.headers.get('Location')}" if 300 <= resp.status_code < 400 else ""
         )
     return resp
-
-def create_app(config_class: type[Config] = Config) -> Flask:
     """Application factory for the LTI tool."""
     app = Flask(__name__, template_folder="../templates")
     app.config.from_object(config_class)
