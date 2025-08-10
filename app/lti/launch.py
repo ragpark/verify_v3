@@ -640,9 +640,19 @@ def _fetch_moodle_students_and_files():
             )
             f_resp.raise_for_status()
             for f in f_resp.json().get("files", []):
+
+                if f.get("isdir"):
+                    continue
                 url = f.get("fileurl")
                 if url:
-                    files.append({"filename": f.get("filename"), "url": url})
+                    # Append token so admin can download directly
+                    files.append(
+                        {
+                            "filename": f.get("filename"),
+                            "url": f"{url}?token={token}",
+                        }
+                    )
+
         except Exception as err:  # pragma: no cover
             current_app.logger.error(
                 f"Failed to fetch files for user {user.get('id')}: {err}"
@@ -666,7 +676,8 @@ def student_files():
             try:
                 resp = requests.get(file_url, timeout=10)
                 resp.raise_for_status()
-                filename = file_url.split("/")[-1]
+                filename = file_url.rsplit("/", 1)[-1].split("?")[0]
+
                 with open(os.path.join(upload_dir, filename), "wb") as handle:
                     handle.write(resp.content)
                 uploaded += 1
