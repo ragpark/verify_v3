@@ -78,28 +78,41 @@ def get_user_files(user_id: int):
 
 
 def get_all_users(limit=200, offset=0):
-    criteria = []
-    data = moodle_api_call("core_enrol_get_enrolled_users", {"courseid": 1})
-    
-    # Add debugging
-    current_app.logger.info(f"Moodle API response: {data}")
-    
+    """
+    Return a list of Moodle users (site-wide).
+    Note: Moodle roles are context-based; without a course we cannot
+    reliably filter to just 'students', so we list all users.
+    """
+    criteria = []  # empty -> all users (subject to limit)
+    data = moodle_api_call(
+        "core_user_get_users",
+        {"criteria": criteria, "limitfrom": offset, "limitnum": limit},
+    )
     if not data:
-        current_app.logger.warning("No data returned from core_user_get_users")
         return []
     
-    if "users" not in data:
-        current_app.logger.warning(f"No 'users' key in response: {data}")
-        return []
+    # The API returns users directly, not wrapped in a "users" key
+    users = data if isinstance(data, list) else data.get("users", [])
     
-    return [
-        {
+    # Filter out system users and normalize
+    filtered_users = []
+    for u in users:
+        # Skip guest and API users
+        username = u.get("username", "")
+        if username in ["guest", "apiuser"]:
+            continue
+            
+        user_info = {
             "id": u.get("id"),
-            "fullname": f"{u.get('fullname') or (u.get('firstname','') + ' ' + u.get('lastname','')).strip()}".strip()
+            "username": username,
+            "fullname": u.get("fullname", "").strip(),
+            "email": u.get("email", ""),
+            "lastaccess": u.get("lastaccess", 0),
+            "enrolledcourses": u.get("enrolledcourses", [])
         }
-        for u in data.get("users", [])
-    ]
-
+        filtered_users.append(user_info)
+    
+    return filtered_users
 def download_moodle_file(file_url: str, token: str | None = None):
     base_url, fallback_token = _moodle_config()
     token = token or fallback_token
@@ -309,27 +322,78 @@ def file_browser():
         users = get_all_users()
         html = """
         <html>
-        <head><title>File Browser</title></head>
+        <head>
+            <title>File Browser - Select User</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .user-card { 
+                    border: 1px solid #ddd; 
+                    margin: 10px 0; 
+                    padding: 15px; 
+                    border-radius: 5px;
+                    background: #f9f9f9;
+                    display: block;
+                    text-decoration: none;
+                    color: inherit;
+                }
+                .user-card:hover { background: #f0f0f0; }
+                .user-name { font-weight: bold; font-size: 16px; margin-bottom: 5px; }
+                .user-details { color: #666; font-size: 14px; }
+                .user-courses { margin-top: 8px; }
+                .course-tag { 
+                    display: inline-block; 
+                    background: #007cba; 
+                    color: white; 
+                    padding: 2px 8px; 
+                    border-radius: 3px; 
+                    font-size: 12px; 
+                    margin-right: 5px;
+                }
+                .warning { 
+                    background: #fff3cd; 
+                    border: 1px solid #ffeaa7; 
+                    padding: 10px; 
+                    border-radius: 5px;
+                    margin-bottom: 20px;
+                }
+            </style>
+        </head>
         <body>
-            <h1>File Browser</h1>
+            <h1>File Browser - Select User</h1>
+            
             {% if not (base_url and token) %}
-              <p><strong>Note:</strong> Moodle configuration incomplete.
-              Set MOODLE_URL (or MOODLE_BASE_URL) and MOODLE_API_TOKEN (or MOODLE_TOKEN).</p>
+            <div class="warning">
+                <strong>Note:</strong> Moodle configuration incomplete.
+                Set MOODLE_URL and MOODLE_API_TOKEN.
+            </div>
             {% endif %}
-            <p>Select a user to view Moodle files.</p>
-            <ul>
+            
+            <p>Select a user to view their files. Showing {{ users|length }} users.</p>
+            
             {% for u in users %}
-                <li>
-                  <a href="{{ url_for('files.file_browser') }}?user_id={{ u.id }}&ltik={{ ltik }}">
-                    {{ u.fullname or ('User ' ~ u.id) }}
-                  </a>
-                </li>
+            <a href="{{ url_for('files.file_browser') }}?user_id={{ u.id }}&ltik={{ ltik }}" class="user-card">
+                <div class="user-name">{{ u.fullname or ('User ' ~ u.id) }}</div>
+                <div class="user-details">
+                    <strong>Username:</strong> {{ u.username }} | 
+                    <strong>Email:</strong> {{ u.email }}
+                </div>
+                {% if u.enrolledcourses %}
+                <div class="user-courses">
+                    <strong>Enrolled in:</strong>
+                    {% for course in u.enrolledcourses %}
+                        <span class="course-tag">{{ course.shortname }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </a>
             {% endfor %}
-            </ul>
+            
+            {% if not users %}
+            <p>No users found.</p>
+            {% endif %}
         </body>
         </html>
         """
-        html = html.replace("&ltik=", "ltik=")
         return render_template_string(
             html, users=users, admin=admin, ltik=ltik, base_url=base_url, token=token
         )
