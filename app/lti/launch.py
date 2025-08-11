@@ -257,6 +257,7 @@ def lti_launch():
         current_app.logger.info(
             f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}"
         )
+
         # Redirect to the originally requested resource if available, avoiding loops
         if redirect_after:
             path = urlparse(redirect_after).path
@@ -265,6 +266,7 @@ def lti_launch():
             if path not in {launch_path, login_path}:
                 return redirect(redirect_after)
         return redirect(url_for("lti.lti_success"))
+
 
     # Log successful launch for non-resource link requests
     current_app.logger.info(
