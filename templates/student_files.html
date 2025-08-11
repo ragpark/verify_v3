@@ -15,6 +15,14 @@
     {% if uploaded is not none %}
     <p>{{ uploaded }} file(s) uploaded to filestore.</p>
     {% endif %}
+    {% if uploaded_files %}
+    <h2>Uploaded Files</h2>
+    <ul>
+        {% for name in uploaded_files %}
+        <li>{{ name }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
     <form method="post">
         {% for student in students %}
         <h3>{{ student.fullname }}</h3>
