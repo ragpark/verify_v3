@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import secrets
 from datetime import datetime, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import jwt
 import requests
@@ -257,8 +257,16 @@ def lti_launch():
         current_app.logger.info(
             f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}"
         )
-        # Redirect to the originally requested resource if available
-        return redirect(redirect_after or url_for("lti.lti_success"))
+
+        # Redirect to the originally requested resource if available, avoiding loops
+        if redirect_after:
+            path = urlparse(redirect_after).path
+            launch_path = url_for("lti.lti_launch")
+            login_path = url_for("lti.login")
+            if path not in {launch_path, login_path}:
+                return redirect(redirect_after)
+        return redirect(url_for("lti.lti_success"))
+
 
     # Log successful launch for non-resource link requests
     current_app.logger.info(
