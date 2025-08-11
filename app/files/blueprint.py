@@ -77,42 +77,6 @@ def get_user_files(user_id: int):
     return data.get("files", []) if data else []
 
 
-def get_all_users(limit=200, offset=0):
-    """
-    Return a list of Moodle users (site-wide).
-    Note: Moodle roles are context-based; without a course we cannot
-    reliably filter to just 'students', so we list all users.
-    """
-    criteria = []  # empty -> all users (subject to limit)
-    data = moodle_api_call(
-        "core_user_get_users",
-        {"criteria": criteria, "limitfrom": offset, "limitnum": limit},
-    )
-    if not data:
-        return []
-    
-    # The API returns users directly, not wrapped in a "users" key
-    users = data if isinstance(data, list) else data.get("users", [])
-    
-    # Filter out system users and normalize
-    filtered_users = []
-    for u in users:
-        # Skip guest and API users
-        username = u.get("username", "")
-        if username in ["guest", "apiuser"]:
-            continue
-            
-        user_info = {
-            "id": u.get("id"),
-            "username": username,
-            "fullname": u.get("fullname", "").strip(),
-            "email": u.get("email", ""),
-            "lastaccess": u.get("lastaccess", 0),
-            "enrolledcourses": u.get("enrolledcourses", [])
-        }
-        filtered_users.append(user_info)
-    
-    return filtered_users
 def download_moodle_file(file_url: str, token: str | None = None):
     base_url, fallback_token = _moodle_config()
     token = token or fallback_token
@@ -313,13 +277,65 @@ def file_browser():
     session_user = session.get("user_id")
     admin = is_admin_user(roles)
     selected_user = request.args.get("user_id", type=int)
+    selected_course = request.args.get("course_id", type=int)
     ltik = getattr(g, "ltik", request.args.get("ltik"))
 
     base_url, token = _moodle_config()
 
-    # Admin with no user selected: list all Moodle users
+    # Admin with no user selected
     if admin and not selected_user:
-        users = get_all_users()
+        # Get course ID from session, URL parameter, or show course selector
+        course_id = selected_course or session.get("context_id")
+        
+        if not course_id:
+            # Show course selector
+            courses = get_courses()
+            html = """
+            <html>
+            <head>
+                <title>File Browser - Select Course</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .course-card { 
+                        border: 1px solid #ddd; 
+                        margin: 10px 0; 
+                        padding: 15px; 
+                        border-radius: 5px;
+                        background: #f9f9f9;
+                        display: block;
+                        text-decoration: none;
+                        color: inherit;
+                    }
+                    .course-card:hover { background: #f0f0f0; }
+                    .course-name { font-weight: bold; font-size: 16px; margin-bottom: 5px; }
+                    .course-details { color: #666; font-size: 14px; }
+                </style>
+            </head>
+            <body>
+                <h1>File Browser - Select Course</h1>
+                <p>First, select a course to view enrolled users.</p>
+                
+                {% for course in courses %}
+                <a href="{{ url_for('files.file_browser') }}?course_id={{ course.id }}&ltik={{ ltik }}" class="course-card">
+                    <div class="course-name">{{ course.fullname }}</div>
+                    <div class="course-details">
+                        <strong>Short name:</strong> {{ course.shortname }}
+                    </div>
+                </a>
+                {% endfor %}
+                
+                {% if not courses %}
+                <p>No courses found.</p>
+                {% endif %}
+            </body>
+            </html>
+            """
+            return render_template_string(html, courses=courses, ltik=ltik)
+        
+        # Get users enrolled in the selected course
+        users = get_enrolled_users(course_id)
+        context_title = session.get("context_title", f"Course {course_id}")
+        
         html = """
         <html>
         <head>
@@ -339,14 +355,14 @@ def file_browser():
                 .user-card:hover { background: #f0f0f0; }
                 .user-name { font-weight: bold; font-size: 16px; margin-bottom: 5px; }
                 .user-details { color: #666; font-size: 14px; }
-                .user-courses { margin-top: 8px; }
-                .course-tag { 
+                .user-roles { margin-top: 5px; }
+                .role-tag { 
                     display: inline-block; 
-                    background: #007cba; 
+                    background: #28a745; 
                     color: white; 
                     padding: 2px 8px; 
                     border-radius: 3px; 
-                    font-size: 12px; 
+                    font-size: 11px; 
                     margin-right: 5px;
                 }
                 .warning { 
@@ -356,6 +372,7 @@ def file_browser():
                     border-radius: 5px;
                     margin-bottom: 20px;
                 }
+                .back-link { margin-bottom: 15px; }
             </style>
         </head>
         <body>
@@ -368,20 +385,29 @@ def file_browser():
             </div>
             {% endif %}
             
-            <p>Select a user to view their files. Showing {{ users|length }} users.</p>
+            {% if selected_course %}
+            <div class="back-link">
+                <a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">&larr; Back to course selection</a>
+            </div>
+            {% endif %}
+            
+            {% if context_title %}
+            <p><strong>Course:</strong> {{ context_title }}</p>
+            {% endif %}
+            
+            <p>Select a user to view their files. Showing {{ users|length }} enrolled users.</p>
             
             {% for u in users %}
-            <a href="{{ url_for('files.file_browser') }}?user_id={{ u.id }}&ltik={{ ltik }}" class="user-card">
+            <a href="{{ url_for('files.file_browser') }}?user_id={{ u.id }}&course_id={{ selected_course }}&ltik={{ ltik }}" class="user-card">
                 <div class="user-name">{{ u.fullname or ('User ' ~ u.id) }}</div>
                 <div class="user-details">
                     <strong>Username:</strong> {{ u.username }} | 
                     <strong>Email:</strong> {{ u.email }}
                 </div>
-                {% if u.enrolledcourses %}
-                <div class="user-courses">
-                    <strong>Enrolled in:</strong>
-                    {% for course in u.enrolledcourses %}
-                        <span class="course-tag">{{ course.shortname }}</span>
+                {% if u.roles %}
+                <div class="user-roles">
+                    {% for role in u.roles %}
+                        <span class="role-tag">{{ role.shortname or role.name }}</span>
                     {% endfor %}
                 </div>
                 {% endif %}
@@ -389,25 +415,37 @@ def file_browser():
             {% endfor %}
             
             {% if not users %}
-            <p>No users found.</p>
+            <p>No users found in this course.</p>
             {% endif %}
         </body>
         </html>
         """
         return render_template_string(
-            html, users=users, admin=admin, ltik=ltik, base_url=base_url, token=token
+            html, 
+            users=users, 
+            admin=admin, 
+            ltik=ltik, 
+            base_url=base_url, 
+            token=token,
+            context_title=context_title,
+            selected_course=course_id
         )
 
     # Admin + user selected: show that user's Moodle files and local uploads
     if admin and selected_user:
         moodle_files = get_user_files(selected_user)
         local_files = [f for f in FILE_METADATA.values() if f.get("owner") == selected_user]
+        back_url = url_for('files.file_browser')
+        if selected_course:
+            back_url += f"?course_id={selected_course}"
+        back_url += f"&ltik={ltik}"
+        
         html = """
         <html>
         <head><title>User Files</title></head>
         <body>
             <h1>User {{ selected_user }} Files</h1>
-            <p><a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">Back to users</a></p>
+            <p><a href="{{ back_url }}">Back to user list</a></p>
 
             <h2>Moodle files</h2>
             {% if not moodle_files %}
@@ -445,6 +483,7 @@ def file_browser():
             local_files=local_files,
             ltik=ltik,
             token=token,
+            back_url=back_url
         )
 
     # Non-admin: show own local uploads (unchanged)
@@ -474,3 +513,60 @@ def file_browser():
     </html>
     """
     return render_template_string(html, files=files, ltik=ltik)
+def get_enrolled_users(course_id=None):
+    """
+    Return users enrolled in a specific course.
+    If no course_id provided, try to get it from LTI session context.
+    """
+    if not course_id:
+        # Try to get course ID from LTI session context
+        course_id = session.get("context_id")
+        
+    if not course_id:
+        current_app.logger.warning("No course ID available for getting enrolled users")
+        return []
+    
+    data = moodle_api_call(
+        "core_enrol_get_enrolled_users", 
+        {"courseid": course_id}
+    )
+    
+    if not data:
+        current_app.logger.warning(f"No data returned from core_enrol_get_enrolled_users for course {course_id}")
+        return []
+    
+    # Filter and normalize the user data
+    filtered_users = []
+    for u in data:
+        # Skip system users if needed
+        username = u.get("username", "")
+        if username in ["guest", "apiuser"]:
+            continue
+            
+        user_info = {
+            "id": u.get("id"),
+            "username": username,
+            "fullname": u.get("fullname", "").strip(),
+            "email": u.get("email", ""),
+            "firstaccess": u.get("firstaccess", 0),
+            "lastaccess": u.get("lastaccess", 0),
+            "roles": u.get("roles", [])
+        }
+        filtered_users.append(user_info)
+    
+    return filtered_users
+
+# Keep the old function name for compatibility, but use the new implementation
+def get_all_users(limit=200, offset=0):
+    """Get enrolled users (renamed for compatibility)"""
+    return get_enrolled_users()
+    
+def get_courses():
+    """Get available courses for course selection."""
+    data = moodle_api_call("core_course_get_courses")
+    if not data:
+        return []
+    
+    # Filter out the site course (usually id=1)
+    courses = [course for course in data if course.get("id", 0) > 1]
+    return courses
