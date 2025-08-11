@@ -98,7 +98,6 @@ def _moodle_config():
 
 
 def moodle_api_call(function: str, params: dict | None = None):
-    """Generic Moodle REST API wrapper with debug logging."""
     base_url, token = _moodle_config()
     if not base_url or not token:
         current_app.logger.error("Moodle configuration missing (base_url or token).")
@@ -111,12 +110,15 @@ def moodle_api_call(function: str, params: dict | None = None):
         "moodlewsrestformat": "json",
     })
 
-    log_params = {k: v for k, v in params.items() if k != "wstoken"}
+    # NEW: encode lists as Moodle expects
+    encoded_params = _encode_moodle_params(params)
+
+    log_params = {k: v for k, v in encoded_params.items() if k != "wstoken"}
     current_app.logger.info("Moodle API call %s with params %s", function, log_params)
 
     try:
         resp = requests.get(
-            f"{base_url}/webservice/rest/server.php", params=params, timeout=10
+            f"{base_url}/webservice/rest/server.php", params=encoded_params, timeout=10
         )
         resp.raise_for_status()
         data = resp.json()
@@ -860,6 +862,22 @@ def api_diagnostic():
         "file_source_config": FILE_SOURCE_CONFIG,
         "recommendation": "Enable forum and workshop APIs in FILE_SOURCE_CONFIG only if those tests succeed"
     })
+
+
+def _encode_moodle_params(params: dict) -> dict:
+    """
+    Moodle REST expects list params as indexed keys:
+    {"courseids": [2, 3]}  -> {"courseids[0]": 2, "courseids[1]": 3}
+    Also coerces simple types to int/str as needed.
+    """
+    encoded = {}
+    for k, v in (params or {}).items():
+        if isinstance(v, list):
+            for i, item in enumerate(v):
+                encoded[f"{k}[{i}]"] = item
+        else:
+            encoded[k] = v
+    return encoded
 
 
 @files_bp.route("/file_browser")
