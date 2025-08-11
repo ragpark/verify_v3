@@ -37,14 +37,31 @@ def client(app):
     return app.test_client()
 
 
-def test_require_session_redirects_to_login(client):
-    resp = client.get("/files/file_browser")
+def test_require_session_redirects_to_login_with_hint(client):
+    resp = client.get("/files/file_browser?login_hint=test-user")
     assert resp.status_code == 302
     location = resp.headers.get("Location", "")
     assert "/lti/login" in location
     qs = parse_qs(urlparse(location).query)
     assert qs.get("iss") == ["https://lms.example.com"]
+    assert qs.get("login_hint") == ["test-user"]
 
+
+def test_require_session_returns_html_error_without_hint(client):
+    resp = client.get("/files/file_browser")
+    assert resp.status_code == 401
+    assert "text/html" in resp.headers.get("Content-Type", "")
+    assert b"Unauthorized" in resp.data
+
+
+def test_require_session_redirects_with_placeholder_hint(client, monkeypatch):
+    monkeypatch.setenv("MOODLE_PLACEHOLDER_HINT", "placeholder")
+    resp = client.get("/files/file_browser")
+    assert resp.status_code == 302
+    location = resp.headers.get("Location", "")
+    qs = parse_qs(urlparse(location).query)
+    assert qs.get("login_hint") == ["placeholder"]
+    assert qs.get("iss") == ["https://lms.example.com"]
 
 
 def test_require_session_returns_html_error(client):
