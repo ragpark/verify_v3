@@ -78,6 +78,7 @@ def test_admin_file_browser_lists_students(client, monkeypatch):
         sess["user_id"] = 1
         sess["roles"] = ["urn:lti:role:ims/lis/Instructor"]
 
+
     monkeypatch.setenv("MOODLE_COURSE_ID", "1")
     monkeypatch.setattr(
         "app.files.blueprint.get_learners_in_course",
@@ -105,6 +106,7 @@ def test_admin_select_user_lists_files(client):
     with client.session_transaction() as sess:
         sess["user_id"] = 1
         sess["roles"] = ["urn:lti:role:ims/lis/Instructor"]
+
 
     resp = client.get("/files/file_browser?user_id=10")
     assert resp.status_code == 200
