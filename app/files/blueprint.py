@@ -79,10 +79,7 @@ def get_user_files(user_id: int):
 
 def get_all_users(limit=200, offset=0):
     criteria = []
-    data = moodle_api_call(
-        "core_user_get_users",
-        {"criteria": criteria, "limitfrom": offset, "limitnum": limit},
-    )
+    data = moodle_api_call("core_enrol_get_enrolled_users", {"courseid": '101'})
     
     # Add debugging
     current_app.logger.info(f"Moodle API response: {data}")
