@@ -284,10 +284,36 @@ def list_uploaded_files():
 @files_bp.route("/file_browser")
 def file_browser():
     roles = session.get("roles", [])
-    user_id = session.get("user_id")
+    session_user = session.get("user_id")
     admin = is_admin_user(roles)
-    files = [f for f in FILE_METADATA.values() if admin or f.get("owner") == user_id]
+    selected_user = request.args.get("user_id", type=int)
     ltik = getattr(g, "ltik", request.args.get("ltik"))
+
+    if admin and not selected_user:
+        course_id = (
+            request.args.get("course_id", type=int)
+            or current_app.config.get("MOODLE_COURSE_ID")
+            or os.getenv("MOODLE_COURSE_ID")
+        )
+        students = get_learners_in_course(int(course_id)) if course_id else []
+        html = """
+        <html>
+        <head><title>File Browser</title></head>
+        <body>
+            <h1>File Browser</h1>
+            <p>Select a student to view uploaded files.</p>
+            <ul>
+            {% for s in students %}
+                <li><a href="{{ url_for('files.file_browser') }}?user_id={{ s.id }}&ltik={{ ltik }}">{{ s.fullname }}</a></li>
+            {% endfor %}
+            </ul>
+        </body>
+        </html>
+        """
+        return render_template_string(html, students=students, admin=admin, ltik=ltik)
+
+    target_user = selected_user if admin and selected_user else session_user
+    files = [f for f in FILE_METADATA.values() if f.get("owner") == target_user]
 
     html = """
     <html>
@@ -296,7 +322,9 @@ def file_browser():
     </head>
     <body>
         <h1>File Browser</h1>
-        {% if admin %}
+        {% if admin and selected_user %}
+        <p><a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">Back to students</a></p>
+        {% elif admin %}
         <p>Admin interface</p>
         {% else %}
         <p>Student interface</p>
@@ -306,12 +334,20 @@ def file_browser():
             <li>{{f.filename}} - <a href="{{ url_for('files.download_file', file_id=f.id) }}?ltik={{ ltik }}">Download</a></li>
         {% endfor %}
         </ul>
+        {% if not admin %}
         <form action="{{ url_for('files.upload_files') }}?ltik={{ ltik }}" method="post" enctype="multipart/form-data">
             <input type="hidden" name="ltik" value="{{ ltik }}"/>
             <input type="file" name="file"/>
             <button type="submit">Upload</button>
         </form>
+        {% endif %}
     </body>
     </html>
     """
-    return render_template_string(html, files=files, admin=admin, ltik=ltik)
+    return render_template_string(
+        html,
+        files=files,
+        admin=admin,
+        ltik=ltik,
+        selected_user=selected_user,
+    )
