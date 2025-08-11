@@ -30,14 +30,30 @@ ALLOWED_EXTENSIONS = {"txt", "pdf", "png", "jpg", "jpeg", "gif"}
 # ---------------------------------------------------------------------------
 
 def is_admin_user(roles: list[str]) -> bool:
-    """Return True if any role grants admin privileges."""
+    """Return True if any role grants admin privileges.
+
+    Roles in LTI launches can contain a variety of URI formats, e.g.::
+
+        urn:lti:role:ims/lis/Instructor
+        http://purl.imsglobal.org/vocab/lis/v2/membership#Administrator
+
+    We normalise by splitting on both ``#`` and ``/`` and checking the
+    trailing token case-insensitively so that unexpected URI schemes do
+    not prevent legitimate instructors from being recognised as admins.
+    """
+
     admin_indicators = {
-        "Administrator",
-        "Instructor",
-        "ContentDeveloper",
-        "TeachingAssistant",
+        "administrator",
+        "instructor",
+        "contentdeveloper",
+        "teachingassistant",
     }
-    return any(r.split("#")[-1] in admin_indicators for r in roles)
+
+    for role in roles:
+        token = role.split("#")[-1].split("/")[-1].lower()
+        if token in admin_indicators:
+            return True
+    return False
 
 
 def moodle_api_call(function: str, params: dict | None = None):

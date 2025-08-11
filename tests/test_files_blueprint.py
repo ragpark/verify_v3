@@ -76,7 +76,8 @@ def test_admin_file_browser_lists_students(client, monkeypatch):
     FILE_METADATA.clear()
     with client.session_transaction() as sess:
         sess["user_id"] = 1
-        sess["roles"] = ["Instructor"]
+        sess["roles"] = ["urn:lti:role:ims/lis/Instructor"]
+
 
     monkeypatch.setenv("MOODLE_COURSE_ID", "1")
     monkeypatch.setattr(
@@ -104,7 +105,8 @@ def test_admin_select_user_lists_files(client):
 
     with client.session_transaction() as sess:
         sess["user_id"] = 1
-        sess["roles"] = ["Instructor"]
+        sess["roles"] = ["urn:lti:role:ims/lis/Instructor"]
+
 
     resp = client.get("/files/file_browser?user_id=10")
     assert resp.status_code == 200
