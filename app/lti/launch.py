@@ -89,10 +89,11 @@ def login():
         "response_mode": "form_post",
         "client_id": platform.client_id,
         "redirect_uri": url_for("lti.lti_launch", _external=True),
-        "login_hint": request.values.get("login_hint", ""),
         "state": state_val,
         "nonce": nonce_val,
     }
+    if login_hint:
+        params["login_hint"] = login_hint
     
     # Optional lti_message_hint support
     if request.values.get("lti_message_hint"):
