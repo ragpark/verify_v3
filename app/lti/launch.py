@@ -254,15 +254,17 @@ def lti_launch():
     elif message_type == "LtiResourceLinkRequest":
         # Regular resource link launch
         current_app.logger.info("Resource link request received")
-    
-    # Log successful launch
-    current_app.logger.info(f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}")
-    
-    # Instead of redirecting back to launch endpoint, redirect to success page
-    if message_type == "LtiResourceLinkRequest":
-        # For regular resource link requests, redirect to success landing page
-        return redirect(url_for("lti.lti_success"))
-    
+        current_app.logger.info(
+            f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}"
+        )
+        # Redirect to the originally requested resource if available
+        return redirect(redirect_after or url_for("lti.lti_success"))
+
+    # Log successful launch for non-resource link requests
+    current_app.logger.info(
+        f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}"
+    )
+
     # For other message types, return JSON
     return jsonify({
         "launch": "success",
@@ -271,7 +273,7 @@ def lti_launch():
         "platform": iss,
         "user_name": data.get("name"),
         "context": data.get("https://purl.imsglobal.org/spec/lti/claim/context", {}).get("title"),
-        "return_url": data.get("https://purl.imsglobal.org/spec/lti/claim/launch_presentation", {}).get("return_url")
+        "return_url": data.get("https://purl.imsglobal.org/spec/lti/claim/launch_presentation", {}).get("return_url"),
     })
 
 
