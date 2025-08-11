@@ -198,3 +198,4 @@ def test_student_files_shows_uploaded_list(client, tmp_path, monkeypatch):
     assert resp.status_code == 200
     assert (tmp_path / "loaded.txt").exists()
     assert b"loaded.txt" in resp.data
+
