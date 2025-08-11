@@ -1,5 +1,6 @@
 import jwt
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 import os
 import sys
 import pytest
@@ -108,4 +109,6 @@ def test_resource_link_launch_avoids_login_redirect(client, app, monkeypatch):
 
     res = client.post("/lti/launch", data={"id_token": "token", "state": "state123"})
     assert res.status_code == 302
-    assert res.headers["Location"].endswith("/lti/success")
+    loc = res.headers["Location"]
+    assert urlparse(loc).path == "/lti/success"
+    assert "ltik" in parse_qs(urlparse(loc).query)
