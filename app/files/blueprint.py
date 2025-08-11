@@ -78,19 +78,23 @@ def get_user_files(user_id: int):
 
 
 def get_all_users(limit=200, offset=0):
-    """
-    Return a list of Moodle users (site-wide).
-    Note: Moodle roles are context-based; without a course we cannot
-    reliably filter to just 'students', so we list all users.
-    """
-    criteria = []  # empty -> all users (subject to limit)
+    criteria = []
     data = moodle_api_call(
         "core_user_get_users",
         {"criteria": criteria, "limitfrom": offset, "limitnum": limit},
     )
+    
+    # Add debugging
+    current_app.logger.info(f"Moodle API response: {data}")
+    
     if not data:
+        current_app.logger.warning("No data returned from core_user_get_users")
         return []
-    # Normalise to a minimal shape like enrolled users API
+    
+    if "users" not in data:
+        current_app.logger.warning(f"No 'users' key in response: {data}")
+        return []
+    
     return [
         {
             "id": u.get("id"),
@@ -98,7 +102,6 @@ def get_all_users(limit=200, offset=0):
         }
         for u in data.get("users", [])
     ]
-
 
 def download_moodle_file(file_url: str, token: str | None = None):
     base_url, fallback_token = _moodle_config()
