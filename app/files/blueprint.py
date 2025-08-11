@@ -3,6 +3,7 @@ import uuid
 from flask import (
     Blueprint,
     current_app,
+    g,
     jsonify,
     request,
     session,
@@ -14,6 +15,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 import requests
 from ..models import Platform
+import jwt
 
 files_bp = Blueprint("files", __name__)
 
@@ -104,6 +106,30 @@ def _ensure_lti_session():
     return True
 
 
+def _try_hydrate_from_ltik():
+    token = (
+        request.args.get("ltik")
+        or (request.headers.get("Authorization", "").removeprefix("Bearer ").strip() or None)
+        or (request.form.get("ltik") if request.method == "POST" else None)
+    )
+    if not token:
+        return False
+    try:
+        data = jwt.decode(token, current_app.config["SECRET_KEY"], algorithms=["HS256"])
+    except Exception:
+        return False
+
+    session.setdefault("user_id", data.get("sub"))
+    session.setdefault("roles", data.get("roles", []))
+    session.setdefault("platform_id", data.get("platform_id"))
+    session.setdefault("platform_issuer", data.get("platform_issuer"))
+    session.setdefault("deployment_id", data.get("deployment_id"))
+    session.setdefault("context_id", data.get("context_id"))
+    session.setdefault("context_title", data.get("context_title"))
+    g.ltik = token
+    return True
+
+
 def _current_upload_folder() -> str:
     folder = os.getenv("UPLOAD_FOLDER", "/tmp/lti_files")
     os.makedirs(folder, exist_ok=True)
@@ -133,7 +159,12 @@ def _validate_file(file_storage) -> tuple[bool, str]:
 
 @files_bp.before_request
 def _require_session():
-    if _ensure_lti_session():
+    # Try ltik first (cookieless)
+    if "user_id" not in session:
+        if _try_hydrate_from_ltik():
+            return None
+
+    if "user_id" in session:
         return None
 
     html = """
@@ -141,8 +172,6 @@ def _require_session():
     <p>No active LTI session. Please launch this tool from your LMS.</p>
     """
 
-    # API clients that explicitly request JSON get an HTML error page
-    # instead of a JSON payload so the response is more user-friendly.
     if request.headers.get("Accept") == "application/json":
         return render_template_string(html), 401
 
@@ -154,9 +183,6 @@ def _require_session():
         else:
             return render_template_string(html), 401
 
-    # Otherwise redirect to the LTI login endpoint to re-establish session
-    # before hitting the requested URL. Include the platform issuer so the
-    # login handler knows which registration to use.
     platform = Platform.query.first()
     if platform:
         return redirect(
@@ -261,6 +287,8 @@ def file_browser():
     user_id = session.get("user_id")
     admin = is_admin_user(roles)
     files = [f for f in FILE_METADATA.values() if admin or f.get("owner") == user_id]
+    ltik = getattr(g, "ltik", request.args.get("ltik"))
+
     html = """
     <html>
     <head>
@@ -275,14 +303,15 @@ def file_browser():
         {% endif %}
         <ul>
         {% for f in files %}
-            <li>{{f.filename}} - <a href="{{ url_for('files.download_file', file_id=f.id) }}">Download</a></li>
+            <li>{{f.filename}} - <a href="{{ url_for('files.download_file', file_id=f.id) }}?ltik={{ ltik }}">Download</a></li>
         {% endfor %}
         </ul>
-        <form action="{{ url_for('files.upload_files') }}" method="post" enctype="multipart/form-data">
+        <form action="{{ url_for('files.upload_files') }}?ltik={{ ltik }}" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="ltik" value="{{ ltik }}"/>
             <input type="file" name="file"/>
             <button type="submit">Upload</button>
         </form>
     </body>
     </html>
     """
-    return render_template_string(html, files=files, admin=admin)
+    return render_template_string(html, files=files, admin=admin, ltik=ltik)

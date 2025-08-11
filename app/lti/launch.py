@@ -265,7 +265,18 @@ def lti_launch():
             login_path = url_for("lti.login")
             if path not in {launch_path, login_path}:
                 return redirect(redirect_after)
-        return redirect(url_for("lti.lti_success"))
+        payload = {
+            "sub": session["user_id"],
+            "roles": session.get("roles", []),
+            "platform_id": session.get("platform_id"),
+            "platform_issuer": session.get("platform_issuer"),
+            "deployment_id": session.get("deployment_id"),
+            "context_id": session.get("context_id"),
+            "context_title": session.get("context_title"),
+            "exp": int((datetime.utcnow() + timedelta(minutes=15)).timestamp()),
+        }
+        ltik = jwt.encode(payload, current_app.config["SECRET_KEY"], algorithm="HS256")
+        return redirect(url_for("lti.lti_success", ltik=ltik))
 
 
     # Log successful launch for non-resource link requests
@@ -590,6 +601,7 @@ def lti_success():
     roles = session.get("roles", [])
     admin = any(r.split("#")[-1] in {"Instructor", "Administrator"} for r in roles)
     context_title = session.get("context_title", "Course")
+    ltik = request.args.get("ltik")
     html = """
     <html>
     <head>
@@ -608,9 +620,9 @@ def lti_success():
         <p>Welcome <strong>{{user_name}}</strong> to <strong>{{context_title}}</strong> from {{platform}}</p>
 
         <div class="card actions">
-          <a href="{{ url_for('files.file_browser') }}">File Browser</a>
+          <a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">File Browser</a>
           {% if admin %}
-          <a href="{{ url_for('lti.student_files') }}">Student Files</a>
+          <a href="{{ url_for('lti.student_files') }}?ltik={{ ltik }}">Student Files</a>
           {% endif %}
         </div>
 
@@ -632,6 +644,7 @@ def lti_success():
         roles=roles,
         admin=admin,
         context_title=context_title,
+        ltik=ltik,
     )
 
 
