@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app import create_app, db
 from app.models import Platform
+from app.files.blueprint import FILE_METADATA
 
 
 
@@ -69,3 +70,42 @@ def test_require_session_returns_html_error(client):
     assert resp.status_code == 401
     assert "text/html" in resp.headers.get("Content-Type", "")
     assert b"Unauthorized" in resp.data
+
+
+def test_admin_file_browser_lists_students(client, monkeypatch):
+    FILE_METADATA.clear()
+    with client.session_transaction() as sess:
+        sess["user_id"] = 1
+        sess["roles"] = ["Instructor"]
+
+    monkeypatch.setenv("MOODLE_COURSE_ID", "1")
+    monkeypatch.setattr(
+        "app.files.blueprint.get_learners_in_course",
+        lambda course_id: [
+            {"id": 10, "fullname": "Alice"},
+            {"id": 11, "fullname": "Bob"},
+        ],
+    )
+
+    resp = client.get("/files/file_browser")
+    assert resp.status_code == 200
+    assert b"Alice" in resp.data
+    assert b"Bob" in resp.data
+
+
+def test_admin_select_user_lists_files(client):
+    FILE_METADATA.clear()
+    FILE_METADATA["f1"] = {
+        "id": "f1",
+        "filename": "sample.txt",
+        "owner": 10,
+        "path": "/tmp/sample.txt",
+    }
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = 1
+        sess["roles"] = ["Instructor"]
+
+    resp = client.get("/files/file_browser?user_id=10")
+    assert resp.status_code == 200
+    assert b"sample.txt" in resp.data
