@@ -71,10 +71,171 @@ def moodle_api_call(function: str, params: dict | None = None):
         return None
 
 
-def get_user_files(user_id: int):
-    """Return all files for a user (no course constraint)."""
-    data = moodle_api_call("core_files_get_user_files", {"userid": user_id})
-    return data.get("files", []) if data else []
+def get_user_files(user_id: int, course_id: int = None):
+    """
+    Return all files for a user across different contexts.
+    Searches private files, course files, and submission areas.
+    """
+    all_files = []
+    
+    # 1. Get user's private files
+    current_app.logger.info(f"Getting private files for user {user_id}")
+    private_files = moodle_api_call("core_files_get_user_files", {"userid": user_id})
+    if private_files:
+        current_app.logger.info(f"Private files API response: {private_files}")
+        files_list = private_files.get("files", [])
+        current_app.logger.info(f"Private files for user {user_id}: {len(files_list)} files")
+        all_files.extend(files_list)
+    else:
+        current_app.logger.warning(f"No private files response for user {user_id}")
+    
+    # 2. If we have a course context, get course-related files
+    if course_id:
+        current_app.logger.info(f"Getting course files for user {user_id} in course {course_id}")
+        course_files = get_course_user_files(user_id, course_id)
+        all_files.extend(course_files)
+    
+    # 3. Get files from all courses the user is enrolled in
+    enrolled_courses = get_user_courses(user_id)
+    current_app.logger.info(f"User {user_id} enrolled in {len(enrolled_courses)} courses")
+    for course in enrolled_courses:
+        course_files = get_course_user_files(user_id, course.get('id'))
+        all_files.extend(course_files)
+    
+    # Remove duplicates based on file ID
+    seen_files = set()
+    unique_files = []
+    for file_info in all_files:
+        # Create a unique identifier for the file
+        file_id = file_info.get('id') or f"{file_info.get('filename', '')}-{file_info.get('filesize', 0)}-{file_info.get('contextid', '')}"
+        if file_id not in seen_files:
+            seen_files.add(file_id)
+            unique_files.append(file_info)
+    
+    current_app.logger.info(f"Total unique files for user {user_id}: {len(unique_files)}")
+    return unique_files
+
+
+def get_user_courses(user_id: int):
+    """Get courses where user is enrolled."""
+    data = moodle_api_call("core_enrol_get_users_courses", {"userid": user_id})
+    if data:
+        current_app.logger.info(f"User {user_id} courses: {len(data)} courses found")
+        return data
+    else:
+        current_app.logger.warning(f"No courses found for user {user_id}")
+        return []
+
+
+def get_course_user_files(user_id: int, course_id: int):
+    """Get files from a specific course context for a user."""
+    files = []
+    
+    try:
+        current_app.logger.info(f"Getting course content for course {course_id}")
+        
+        # Method 1: Get all course files and filter by user
+        course_content = moodle_api_call("core_course_get_contents", {"courseid": course_id})
+        if course_content:
+            current_app.logger.info(f"Course {course_id} has {len(course_content)} sections")
+            for section in course_content:
+                for module in section.get('modules', []):
+                    # Look for files in course modules
+                    module_files = module.get('contents', [])
+                    for file_info in module_files:
+                        # Add some context to help identify the file
+                        file_info['course_context'] = f"Course {course_id}, Module: {module.get('name', 'Unknown')}"
+                        files.append(file_info)
+        
+        # Method 2: Try assignment submissions if available
+        current_app.logger.info(f"Getting assignments for course {course_id}")
+        assignments = moodle_api_call("mod_assign_get_assignments", {"courseids": [course_id]})
+        if assignments and 'courses' in assignments:
+            for course in assignments['courses']:
+                for assignment in course.get('assignments', []):
+                    # Get user submissions for this assignment
+                    submissions = moodle_api_call("mod_assign_get_submissions", {
+                        "assignmentids": [assignment['id']]
+                    })
+                    if submissions and 'assignments' in submissions:
+                        for assign in submissions['assignments']:
+                            for submission in assign.get('submissions', []):
+                                if submission.get('userid') == user_id:
+                                    # Process submission files
+                                    for plugin in submission.get('plugins', []):
+                                        if plugin.get('type') == 'file':
+                                            for file_area in plugin.get('fileareas', []):
+                                                for file_info in file_area.get('files', []):
+                                                    file_info['assignment_context'] = f"Assignment: {assignment.get('name', 'Unknown')}"
+                                                    files.append(file_info)
+    
+    except Exception as e:
+        current_app.logger.error(f"Error getting course files for user {user_id} in course {course_id}: {e}")
+    
+    current_app.logger.info(f"Found {len(files)} course files for user {user_id} in course {course_id}")
+    return files
+
+
+def get_courses():
+    """Get available courses for course selection."""
+    data = moodle_api_call("core_course_get_courses")
+    if not data:
+        return []
+    
+    # Filter out the site course (usually id=1)
+    courses = [course for course in data if course.get("id", 0) > 1]
+    current_app.logger.info(f"Found {len(courses)} available courses")
+    return courses
+
+
+def get_enrolled_users(course_id=None):
+    """
+    Return users enrolled in a specific course.
+    If no course_id provided, try to get it from LTI session context.
+    """
+    if not course_id:
+        # Try to get course ID from LTI session context
+        course_id = session.get("context_id")
+        
+    if not course_id:
+        current_app.logger.warning("No course ID available for getting enrolled users")
+        return []
+    
+    data = moodle_api_call(
+        "core_enrol_get_enrolled_users", 
+        {"courseid": course_id}
+    )
+    
+    if not data:
+        current_app.logger.warning(f"No data returned from core_enrol_get_enrolled_users for course {course_id}")
+        return []
+    
+    # Filter and normalize the user data
+    filtered_users = []
+    for u in data:
+        # Skip system users if needed
+        username = u.get("username", "")
+        if username in ["guest", "apiuser"]:
+            continue
+            
+        user_info = {
+            "id": u.get("id"),
+            "username": username,
+            "fullname": u.get("fullname", "").strip(),
+            "email": u.get("email", ""),
+            "firstaccess": u.get("firstaccess", 0),
+            "lastaccess": u.get("lastaccess", 0),
+            "roles": u.get("roles", [])
+        }
+        filtered_users.append(user_info)
+    
+    current_app.logger.info(f"Found {len(filtered_users)} enrolled users in course {course_id}")
+    return filtered_users
+
+# Keep the old function name for compatibility, but use the new implementation
+def get_all_users(limit=200, offset=0):
+    """Get enrolled users (renamed for compatibility)"""
+    return get_enrolled_users()
 
 
 def download_moodle_file(file_url: str, token: str | None = None):
@@ -191,8 +352,31 @@ def _require_session():
 
 @files_bp.route("/get_user_files/<int:user_id>")
 def get_user_files_route(user_id: int):
-    files = get_user_files(user_id)
+    course_id = request.args.get("course_id", type=int)
+    files = get_user_files(user_id, course_id)
     return jsonify(files)
+
+
+@files_bp.route("/debug_user_files/<int:user_id>")
+def debug_user_files(user_id: int):
+    """Debug route to see raw API responses."""
+    if not is_admin_user(session.get("roles", [])):
+        return jsonify({"error": "forbidden"}), 403
+    
+    results = {}
+    
+    # Test different API calls
+    results["private_files"] = moodle_api_call("core_files_get_user_files", {"userid": user_id})
+    results["user_courses"] = moodle_api_call("core_enrol_get_users_courses", {"userid": user_id})
+    
+    # Try getting files from user's courses
+    courses = results["user_courses"]
+    if courses:
+        course_id = courses[0].get("id")
+        results["course_contents"] = moodle_api_call("core_course_get_contents", {"courseid": course_id})
+        results["assignments"] = moodle_api_call("mod_assign_get_assignments", {"courseids": [course_id]})
+    
+    return jsonify(results)
 
 
 @files_bp.route("/copy_moodle_files", methods=["POST"])
@@ -433,46 +617,115 @@ def file_browser():
 
     # Admin + user selected: show that user's Moodle files and local uploads
     if admin and selected_user:
-        moodle_files = get_user_files(selected_user)
+        course_id = selected_course or session.get("context_id")
+        
+        # Add debugging
+        current_app.logger.info(f"Getting files for user {selected_user}, course {course_id}")
+        
+        moodle_files = get_user_files(selected_user, course_id)
         local_files = [f for f in FILE_METADATA.values() if f.get("owner") == selected_user]
+        
+        # Log what we found
+        current_app.logger.info(f"Found {len(moodle_files)} Moodle files, {len(local_files)} local files")
+        if moodle_files:
+            current_app.logger.info(f"Sample Moodle file: {moodle_files[0]}")
+        
         back_url = url_for('files.file_browser')
         if selected_course:
             back_url += f"?course_id={selected_course}"
         back_url += f"&ltik={ltik}"
         
+        # Enhanced HTML template with debugging info
         html = """
         <html>
-        <head><title>User Files</title></head>
+        <head>
+            <title>User Files</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .file-section { margin: 20px 0; }
+                .file-item { 
+                    border: 1px solid #ddd; 
+                    padding: 10px; 
+                    margin: 5px 0; 
+                    border-radius: 3px;
+                    background: #f9f9f9;
+                }
+                .file-details { font-size: 12px; color: #666; margin-top: 5px; }
+                .debug-info { 
+                    background: #e7f3ff; 
+                    border: 1px solid #b3d9ff; 
+                    padding: 10px; 
+                    margin: 10px 0; 
+                    border-radius: 3px;
+                    font-family: monospace;
+                    font-size: 12px;
+                }
+                .debug-link { 
+                    background: #f0f0f0; 
+                    border: 1px solid #ccc; 
+                    padding: 5px 10px; 
+                    margin: 5px 0; 
+                    border-radius: 3px;
+                }
+            </style>
+        </head>
         <body>
             <h1>User {{ selected_user }} Files</h1>
-            <p><a href="{{ back_url }}">Back to user list</a></p>
+            <p><a href="{{ back_url }}">&larr; Back to user list</a></p>
 
-            <h2>Moodle files</h2>
-            {% if not moodle_files %}
-              <p>No Moodle files found for this user.</p>
-            {% else %}
-              <ul>
-                {% for f in moodle_files if not f.isdir %}
-                  <li>
-                    {{ f.filename }}
-                    {% if f.fileurl %}
-                      - <a href="{{ f.fileurl }}?token={{ token }}" target="_blank" rel="noopener">Open</a>
-                    {% endif %}
-                  </li>
-                {% endfor %}
-              </ul>
-            {% endif %}
+            <div class="debug-info">
+                <strong>Debug Info:</strong><br>
+                Moodle files found: {{ moodle_files|length }}<br>
+                Local files found: {{ local_files|length }}<br>
+                Course ID: {{ course_id }}<br>
+                User ID: {{ selected_user }}
+            </div>
+            
+            <div class="debug-link">
+                <a href="{{ url_for('files.debug_user_files', user_id=selected_user) }}?ltik={{ ltik }}" target="_blank">
+                    View Raw API Debug Data
+                </a>
+            </div>
 
-            <h2>Local uploads</h2>
-            {% if not local_files %}
-              <p>No local uploads for this user.</p>
-            {% else %}
-              <ul>
-                {% for f in local_files %}
-                  <li>{{ f.filename }} - <a href="{{ url_for('files.download_file', file_id=f.id) }}?ltik={{ ltik }}">Download</a></li>
-                {% endfor %}
-              </ul>
-            {% endif %}
+            <div class="file-section">
+                <h2>Moodle Files ({{ moodle_files|length }})</h2>
+                {% if not moodle_files %}
+                    <p>No Moodle files found for this user.</p>
+                    <p><em>This could mean: no files uploaded, permission issues, or files in different contexts.</em></p>
+                {% else %}
+                    {% for f in moodle_files %}
+                    <div class="file-item">
+                        <strong>{{ f.filename or 'Unnamed file' }}</strong>
+                        {% if f.fileurl %}
+                            - <a href="{{ f.fileurl }}?token={{ token }}" target="_blank" rel="noopener">Open</a>
+                        {% endif %}
+                        <div class="file-details">
+                            Size: {{ f.filesize or 'Unknown' }} bytes | 
+                            Type: {{ f.mimetype or 'Unknown' }} |
+                            Component: {{ f.component or 'Unknown' }} |
+                            Area: {{ f.filearea or 'Unknown' }}
+                            {% if f.contextid %}| Context: {{ f.contextid }}{% endif %}
+                            {% if f.course_context %}| {{ f.course_context }}{% endif %}
+                            {% if f.assignment_context %}| {{ f.assignment_context }}{% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            <div class="file-section">
+                <h2>Local Uploads ({{ local_files|length }})</h2>
+                {% if not local_files %}
+                    <p>No local uploads for this user.</p>
+                {% else %}
+                    {% for f in local_files %}
+                    <div class="file-item">
+                        <strong>{{ f.filename }}</strong>
+                        - <a href="{{ url_for('files.download_file', file_id=f.id) }}?ltik={{ ltik }}">Download</a>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
         </body>
         </html>
         """
@@ -483,7 +736,8 @@ def file_browser():
             local_files=local_files,
             ltik=ltik,
             token=token,
-            back_url=back_url
+            back_url=back_url,
+            course_id=course_id
         )
 
     # Non-admin: show own local uploads (unchanged)
@@ -513,60 +767,3 @@ def file_browser():
     </html>
     """
     return render_template_string(html, files=files, ltik=ltik)
-def get_enrolled_users(course_id=None):
-    """
-    Return users enrolled in a specific course.
-    If no course_id provided, try to get it from LTI session context.
-    """
-    if not course_id:
-        # Try to get course ID from LTI session context
-        course_id = session.get("context_id")
-        
-    if not course_id:
-        current_app.logger.warning("No course ID available for getting enrolled users")
-        return []
-    
-    data = moodle_api_call(
-        "core_enrol_get_enrolled_users", 
-        {"courseid": course_id}
-    )
-    
-    if not data:
-        current_app.logger.warning(f"No data returned from core_enrol_get_enrolled_users for course {course_id}")
-        return []
-    
-    # Filter and normalize the user data
-    filtered_users = []
-    for u in data:
-        # Skip system users if needed
-        username = u.get("username", "")
-        if username in ["guest", "apiuser"]:
-            continue
-            
-        user_info = {
-            "id": u.get("id"),
-            "username": username,
-            "fullname": u.get("fullname", "").strip(),
-            "email": u.get("email", ""),
-            "firstaccess": u.get("firstaccess", 0),
-            "lastaccess": u.get("lastaccess", 0),
-            "roles": u.get("roles", [])
-        }
-        filtered_users.append(user_info)
-    
-    return filtered_users
-
-# Keep the old function name for compatibility, but use the new implementation
-def get_all_users(limit=200, offset=0):
-    """Get enrolled users (renamed for compatibility)"""
-    return get_enrolled_users()
-    
-def get_courses():
-    """Get available courses for course selection."""
-    data = moodle_api_call("core_course_get_courses")
-    if not data:
-        return []
-    
-    # Filter out the site course (usually id=1)
-    courses = [course for course in data if course.get("id", 0) > 1]
-    return courses
