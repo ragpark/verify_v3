@@ -15,7 +15,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     app.config.from_object(config_class)
 
     # Trust Railway's reverse proxy so Flask sees https/host/port correctly
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
     # Ensure url_for(..., _external=True) prefers HTTPS and cookies are secure (LTI cross-site)
     app.config.setdefault("PREFERRED_URL_SCHEME", "https")
