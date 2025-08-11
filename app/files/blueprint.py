@@ -170,21 +170,34 @@ def get_assignment_files(user_id: int, course_id: int):
             for course_data in assignments["courses"]:
                 for assignment in course_data.get("assignments", []):
                     assignment_id = assignment.get("id")
-                    
-                    submissions = moodle_api_call("mod_assign_get_submissions", {
-                        "assignmentids": [assignment_id]
-                    })
-                    
-                    if submissions and "assignments" in submissions:
-                        for assign_data in submissions["assignments"]:
-                            for submission in assign_data.get("submissions", []):
-                                if submission.get("userid") == user_id:
-                                    for plugin in submission.get("plugins", []):
-                                        if plugin.get("type") == "file":
-                                            for file_area in plugin.get("fileareas", []):
-                                                for file_info in file_area.get("files", []):
-                                                    file_info['source'] = f"Assignment: {assignment.get('name')}"
-                                                    files.append(file_info)
+                    status = moodle_api_call(
+                        "mod_assign_get_submission_status",
+                        {"assignid": assignment_id, "userid": user_id},
+                    )
+
+                    if not status or "errorcode" in status:
+                        # Permission or other error
+                        if status and status.get("errorcode"):
+                            current_app.logger.error(
+                                "Error getting submission status for assignment %s: %s",
+                                assignment_id,
+                                status,
+                            )
+                        continue
+
+                    lastattempt = status.get("lastattempt", {})
+                    submission = lastattempt.get("submission", {})
+
+                    if not submission or submission.get("status") == "draft":
+                        continue
+
+                    for plugin in submission.get("plugins", []):
+                        if plugin.get("type") != "file":
+                            continue
+                        for file_area in plugin.get("fileareas", []):
+                            for file_info in file_area.get("files", []):
+                                file_info["source"] = f"Assignment: {assignment.get('name')}"
+                                files.append(file_info)
     except Exception as e:
         current_app.logger.error(f"Error getting assignment files: {e}")
     return files
