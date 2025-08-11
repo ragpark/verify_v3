@@ -51,23 +51,32 @@ def _moodle_config():
 
 
 def moodle_api_call(function: str, params: dict | None = None):
-    """Generic Moodle REST API wrapper."""
+    """Generic Moodle REST API wrapper with debug logging."""
     base_url, token = _moodle_config()
     if not base_url or not token:
         current_app.logger.error("Moodle configuration missing (base_url or token).")
         return None
+
     params = params or {}
     params.update({
         "wstoken": token,
         "wsfunction": function,
         "moodlewsrestformat": "json",
     })
+
+    log_params = {k: v for k, v in params.items() if k != "wstoken"}
+    current_app.logger.info("Moodle API call %s with params %s", function, log_params)
+
     try:
-        resp = requests.get(f"{base_url}/webservice/rest/server.php", params=params, timeout=10)
+        resp = requests.get(
+            f"{base_url}/webservice/rest/server.php", params=params, timeout=10
+        )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        current_app.logger.info("Moodle API response %s: %s", function, data)
+        return data
     except Exception as exc:  # pragma: no cover - network errors
-        current_app.logger.error("Moodle API call failed: %s", exc)
+        current_app.logger.error("Moodle API call %s failed: %s", function, exc)
         return None
 
 
@@ -244,11 +253,16 @@ def download_moodle_file(file_url: str, token: str | None = None):
         return None
     # file_url already contains pluginfile path; append token
     try:
+        current_app.logger.info("Downloading Moodle file %s", file_url)
         resp = requests.get(f"{file_url}?token={token}", timeout=10)
         resp.raise_for_status()
-        return resp.content
+        content = resp.content
+        current_app.logger.info(
+            "Downloaded Moodle file %s (%d bytes)", file_url, len(content)
+        )
+        return content
     except Exception as exc:  # pragma: no cover - network errors
-        current_app.logger.error("Failed downloading Moodle file: %s", exc)
+        current_app.logger.error("Failed downloading Moodle file %s: %s", file_url, exc)
         return None
 
 
@@ -373,7 +387,12 @@ def copy_moodle_files():
         path = os.path.join(folder, filename)
         with open(path, "wb") as handle:
             handle.write(content)
-        info = {"id": file_id, "filename": filename, "path": path, "owner": session.get("user_id")}
+        info = {
+            "id": file_id,
+            "filename": filename,
+            "path": path,
+            "owner": int(session.get("user_id")),
+        }
         save_file_metadata(info)
         saved.append(file_id)
     return jsonify({"saved": saved})
@@ -391,7 +410,12 @@ def upload_files():
     file_id = uuid.uuid4().hex
     path = os.path.join(folder, filename)
     file.save(path)
-    info = {"id": file_id, "filename": filename, "path": path, "owner": session.get("user_id")}
+    info = {
+        "id": file_id,
+        "filename": filename,
+        "path": path,
+        "owner": int(session.get("user_id")),
+    }
     save_file_metadata(info)
     return jsonify(info)
 
@@ -423,7 +447,7 @@ def delete_file(file_id: str):
 @files_bp.route("/list_uploaded_files")
 def list_uploaded_files():
     roles = session.get("roles", [])
-    user_id = session.get("user_id")
+    user_id = int(session.get("user_id"))
     if is_admin_user(roles):
         files = list(FILE_METADATA.values())
     else:
@@ -434,7 +458,7 @@ def list_uploaded_files():
 @files_bp.route("/file_browser")
 def file_browser():
     roles = session.get("roles", [])
-    session_user = session.get("user_id")
+    session_user = int(session.get("user_id"))
     admin = is_admin_user(roles)
     selected_user = request.args.get("user_id", type=int)
     selected_course = request.args.get("course_id", type=int)

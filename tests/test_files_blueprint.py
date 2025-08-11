@@ -1,7 +1,7 @@
 import os
 import sys
 from urllib.parse import parse_qs, urlparse
-
+import io
 
 import pytest
 
@@ -77,11 +77,11 @@ def test_admin_file_browser_lists_students(client, monkeypatch):
     with client.session_transaction() as sess:
         sess["user_id"] = 1
         sess["roles"] = ["urn:lti:role:ims/lis/Instructor"]
+        sess["context_id"] = 1
 
 
-    monkeypatch.setenv("MOODLE_COURSE_ID", "1")
     monkeypatch.setattr(
-        "app.files.blueprint.get_learners_in_course",
+        "app.files.blueprint.get_enrolled_users",
         lambda course_id: [
             {"id": 10, "fullname": "Alice"},
             {"id": 11, "fullname": "Bob"},
@@ -111,3 +111,27 @@ def test_admin_select_user_lists_files(client):
     resp = client.get("/files/file_browser?user_id=10")
     assert resp.status_code == 200
     assert b"sample.txt" in resp.data
+
+
+def test_admin_sees_user_uploads(client):
+    FILE_METADATA.clear()
+
+    # Simulate student upload with string user_id
+    with client.session_transaction() as sess:
+        sess["user_id"] = "10"
+        sess["roles"] = ["urn:lti:role:ims/lis/Learner"]
+
+    data = {"file": (io.BytesIO(b"hello"), "hello.txt")}
+    upload_resp = client.post(
+        "/files/upload_files", data=data, content_type="multipart/form-data"
+    )
+    assert upload_resp.status_code == 200
+
+    # Switch to admin session to view user files
+    with client.session_transaction() as sess:
+        sess["user_id"] = 1
+        sess["roles"] = ["urn:lti:role:ims/lis/Instructor"]
+
+    resp = client.get("/files/file_browser?user_id=10")
+    assert resp.status_code == 200
+    assert b"hello.txt" in resp.data
