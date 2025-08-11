@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import secrets
 from datetime import datetime, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import jwt
 import requests
@@ -254,15 +254,23 @@ def lti_launch():
     elif message_type == "LtiResourceLinkRequest":
         # Regular resource link launch
         current_app.logger.info("Resource link request received")
-    
-    # Log successful launch
-    current_app.logger.info(f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}")
-    
-    # Instead of redirecting back to launch endpoint, redirect to success page
-    if message_type == "LtiResourceLinkRequest":
-        # For regular resource link requests, redirect to success landing page
+        current_app.logger.info(
+            f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}"
+        )
+        # Redirect to the originally requested resource if available, avoiding loops
+        if redirect_after:
+            path = urlparse(redirect_after).path
+            launch_path = url_for("lti.lti_launch")
+            login_path = url_for("lti.login")
+            if path not in {launch_path, login_path}:
+                return redirect(redirect_after)
         return redirect(url_for("lti.lti_success"))
-    
+
+    # Log successful launch for non-resource link requests
+    current_app.logger.info(
+        f"Successful LTI launch for user: {data.get('sub')} from platform: {iss}"
+    )
+
     # For other message types, return JSON
     return jsonify({
         "launch": "success",
@@ -271,7 +279,7 @@ def lti_launch():
         "platform": iss,
         "user_name": data.get("name"),
         "context": data.get("https://purl.imsglobal.org/spec/lti/claim/context", {}).get("title"),
-        "return_url": data.get("https://purl.imsglobal.org/spec/lti/claim/launch_presentation", {}).get("return_url")
+        "return_url": data.get("https://purl.imsglobal.org/spec/lti/claim/launch_presentation", {}).get("return_url"),
     })
 
 
