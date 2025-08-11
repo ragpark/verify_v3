@@ -74,39 +74,37 @@ def moodle_api_call(function: str, params: dict | None = None):
 def get_user_files(user_id: int, course_id: int = None):
     """
     Return all files for a user across different contexts.
-    Searches private files, course files, and submission areas.
+    Uses the correct APIs that are actually available in Moodle.
     """
     all_files = []
     
-    # 1. Try to get user's private files (handle API errors gracefully)
+    # 1. Try to get user's private files using the correct API
     current_app.logger.info(f"Getting private files for user {user_id}")
     try:
-        private_files = moodle_api_call("core_files_get_user_files", {"userid": user_id})
-        if private_files and isinstance(private_files, dict):
-            if "files" in private_files:
-                files_list = private_files.get("files", [])
-                current_app.logger.info(f"Private files for user {user_id}: {len(files_list)} files")
-                all_files.extend(files_list)
-            elif "errorcode" in private_files:
-                current_app.logger.warning(f"Private files API error for user {user_id}: {private_files.get('message', 'Unknown error')}")
-        else:
-            current_app.logger.warning(f"No private files response for user {user_id}")
+        # Use the API that's actually available: core_user_get_private_files_info
+        private_files_info = moodle_api_call("core_user_get_private_files_info", {"userid": user_id})
+        if private_files_info and isinstance(private_files_info, dict):
+            current_app.logger.info(f"Private files info for user {user_id}: {private_files_info}")
+            # This API returns file count and quota info, but not the actual files
+            # We need to use core_files_get_files with the user context
+            
+        # Try alternative method to get actual private files
+        user_private_files = get_user_private_files_direct(user_id)
+        all_files.extend(user_private_files)
+        
     except Exception as e:
         current_app.logger.error(f"Exception getting private files for user {user_id}: {e}")
     
-    # 2. Try alternative method for private files if main method failed
-    try:
-        # Try using a different approach to get user files
-        user_context_files = get_user_context_files(user_id)
-        all_files.extend(user_context_files)
-    except Exception as e:
-        current_app.logger.debug(f"Alternative user context files failed: {e}")
-    
-    # 3. If we have a course context, get course-related files
+    # 2. Get files from course modules (these might have file attachments)
     if course_id:
         current_app.logger.info(f"Getting course files for user {user_id} in course {course_id}")
-        course_files = get_course_user_files(user_id, course_id)
+        course_files = get_course_module_files(course_id)
         all_files.extend(course_files)
+    
+    # 3. Get assignment submission files using correct API
+    if course_id:
+        assignment_files = get_assignment_submission_files(user_id, course_id)
+        all_files.extend(assignment_files)
     
     # 4. Get files from all courses the user is enrolled in (avoid duplicate if same course)
     enrolled_courses = get_user_courses(user_id)
@@ -115,50 +113,156 @@ def get_user_files(user_id: int, course_id: int = None):
         course_id_enrolled = course.get('id')
         # Skip if this is the same course we already processed
         if course_id_enrolled != course_id:
-            course_files = get_course_user_files(user_id, course_id_enrolled)
+            course_files = get_course_module_files(course_id_enrolled)
             all_files.extend(course_files)
+            
+            assignment_files = get_assignment_submission_files(user_id, course_id_enrolled)
+            all_files.extend(assignment_files)
     
-    # Remove duplicates based on file ID
+    # Remove duplicates based on file URL or name+size
     seen_files = set()
     unique_files = []
     for file_info in all_files:
         # Create a unique identifier for the file
-        file_id = file_info.get('id') or f"{file_info.get('filename', '')}-{file_info.get('filesize', 0)}-{file_info.get('contextid', '')}"
-        if file_id not in seen_files:
-            seen_files.add(file_id)
+        file_key = (
+            file_info.get('fileurl') or 
+            f"{file_info.get('filename', '')}-{file_info.get('filesize', 0)}-{file_info.get('component', '')}"
+        )
+        if file_key not in seen_files:
+            seen_files.add(file_key)
             unique_files.append(file_info)
     
     current_app.logger.info(f"Total unique files for user {user_id}: {len(unique_files)}")
     return unique_files
 
 
-def get_user_context_files(user_id: int):
-    """Try alternative methods to get user files."""
+def get_user_private_files_direct(user_id: int):
+    """Try to get user private files using available APIs."""
     files = []
     
     try:
-        # Try to get user context ID first
+        # Get user info to find their context
         user_info = moodle_api_call("core_user_get_users_by_field", {
             "field": "id",
             "values": [user_id]
         })
         
         if user_info and len(user_info) > 0:
-            # Try to get files from user context
-            user_context = moodle_api_call("core_files_get_files", {
-                "contextid": f"user_{user_id}",  # This might need adjustment
+            current_app.logger.info(f"Found user info for {user_id}")
+            
+            # Try to get files using core_files_get_files with user context
+            # We need to find the right context ID for the user
+            # User context ID is typically calculated as: contextlevel=30, instanceid=userid
+            
+            # Try different approaches to get user files
+            user_files = moodle_api_call("core_files_get_files", {
+                "contextlevel": 30,  # CONTEXT_USER
+                "instanceid": user_id,
                 "component": "user",
                 "filearea": "private"
             })
             
-            if user_context and isinstance(user_context, dict) and "files" in user_context:
-                for file_info in user_context["files"]:
+            if user_files and isinstance(user_files, dict) and "files" in user_files:
+                for file_info in user_files["files"]:
                     file_info['source'] = 'user_private_area'
                     files.append(file_info)
+                current_app.logger.info(f"Found {len(user_files['files'])} private files for user {user_id}")
+            else:
+                current_app.logger.info(f"No private files found or wrong format: {user_files}")
     
     except Exception as e:
-        current_app.logger.debug(f"Alternative user context method failed: {e}")
+        current_app.logger.debug(f"Direct private files method failed for user {user_id}: {e}")
     
+    return files
+
+
+def get_course_module_files(course_id: int):
+    """Get files attached to course modules."""
+    files = []
+    
+    try:
+        course_content = moodle_api_call("core_course_get_contents", {"courseid": course_id})
+        if course_content and isinstance(course_content, list):
+            current_app.logger.info(f"Course {course_id} has {len(course_content)} sections")
+            for section in course_content:
+                for module in section.get('modules', []):
+                    # Check if module has contents (files)
+                    module_contents = module.get('contents', [])
+                    if module_contents:
+                        current_app.logger.info(f"Module {module.get('name', 'Unknown')} has {len(module_contents)} files")
+                        for file_info in module_contents:
+                            # Add context information
+                            file_info['source'] = f"Course module: {module.get('name', 'Unknown')}"
+                            file_info['course_id'] = course_id
+                            file_info['module_type'] = module.get('modname', 'unknown')
+                            files.append(file_info)
+    except Exception as e:
+        current_app.logger.error(f"Error getting course module files for course {course_id}: {e}")
+    
+    return files
+
+
+def get_assignment_submission_files(user_id: int, course_id: int):
+    """Get files from assignment submissions using correct API calls."""
+    files = []
+    
+    try:
+        # First, get all assignments in the course using the correct API
+        assignments = moodle_api_call("mod_assign_get_assignments", {"courseids": [course_id]})
+        
+        if assignments and isinstance(assignments, dict) and "courses" in assignments:
+            current_app.logger.info(f"Found assignments response for course {course_id}")
+            
+            for course_data in assignments["courses"]:
+                course_assignments = course_data.get("assignments", [])
+                current_app.logger.info(f"Course {course_id} has {len(course_assignments)} assignments")
+                
+                for assignment in course_assignments:
+                    assignment_id = assignment.get("id")
+                    assignment_name = assignment.get("name", "Unknown Assignment")
+                    
+                    try:
+                        # Get submissions for this assignment using correct parameters
+                        submissions = moodle_api_call("mod_assign_get_submissions", {
+                            "assignmentids": [assignment_id]
+                        })
+                        
+                        if submissions and isinstance(submissions, dict) and "assignments" in submissions:
+                            for assign_data in submissions["assignments"]:
+                                user_submissions = assign_data.get("submissions", [])
+                                
+                                # Find submissions by this specific user
+                                for submission in user_submissions:
+                                    if submission.get("userid") == user_id:
+                                        current_app.logger.info(f"Found submission by user {user_id} for assignment {assignment_name}")
+                                        
+                                        # Extract files from submission plugins
+                                        plugins = submission.get("plugins", [])
+                                        for plugin in plugins:
+                                            if plugin.get("type") == "file":
+                                                file_areas = plugin.get("fileareas", [])
+                                                for file_area in file_areas:
+                                                    area_files = file_area.get("files", [])
+                                                    for file_info in area_files:
+                                                        file_info['source'] = f"Assignment submission: {assignment_name}"
+                                                        file_info['assignment_id'] = assignment_id
+                                                        file_info['course_id'] = course_id
+                                                        files.append(file_info)
+                        else:
+                            current_app.logger.debug(f"No submissions data for assignment {assignment_id}: {submissions}")
+                    
+                    except Exception as e:
+                        current_app.logger.error(f"Error getting submissions for assignment {assignment_id}: {e}")
+        
+        elif assignments and isinstance(assignments, dict) and "errorcode" in assignments:
+            current_app.logger.warning(f"Assignment API error for course {course_id}: {assignments.get('message', 'Unknown error')}")
+        else:
+            current_app.logger.info(f"No assignments found for course {course_id}")
+    
+    except Exception as e:
+        current_app.logger.error(f"Error getting assignment submissions for user {user_id} in course {course_id}: {e}")
+    
+    current_app.logger.info(f"Found {len(files)} assignment submission files for user {user_id} in course {course_id}")
     return files
 
 
@@ -173,101 +277,7 @@ def get_user_courses(user_id: int):
         return []
 
 
-def get_course_user_files(user_id: int, course_id: int):
-    """Get files from a specific course context for a user."""
-    files = []
-    
-    try:
-        current_app.logger.info(f"Getting course content for course {course_id}")
-        
-        # Method 1: Get all course files from modules
-        course_content = moodle_api_call("core_course_get_contents", {"courseid": course_id})
-        if course_content and isinstance(course_content, list):
-            current_app.logger.info(f"Course {course_id} has {len(course_content)} sections")
-            for section in course_content:
-                for module in section.get('modules', []):
-                    # Look for files in course modules
-                    module_files = module.get('contents', [])
-                    for file_info in module_files:
-                        # Add some context to help identify the file
-                        file_info['course_context'] = f"Course {course_id}, Module: {module.get('name', 'Unknown')}"
-                        files.append(file_info)
-                    
-                    # If this is an assignment, try to get user submissions
-                    if module.get('modname') == 'assign':
-                        assignment_id = module.get('instance')
-                        if assignment_id:
-                            assignment_files = get_assignment_user_files(user_id, assignment_id, module.get('name', 'Unknown'))
-                            files.extend(assignment_files)
-        
-        # Method 2: Try to get general assignment submissions for the course
-        try:
-            current_app.logger.info(f"Getting assignment submissions for user {user_id} in course {course_id}")
-            # Get all assignments in the course first
-            assignments = moodle_api_call("mod_assign_get_assignments", {"courseids": [course_id]})
-            if assignments and isinstance(assignments, dict) and "courses" in assignments:
-                for course_data in assignments['courses']:
-                    for assignment in course_data.get('assignments', []):
-                        assignment_files = get_assignment_user_files(user_id, assignment['id'], assignment.get('name', 'Unknown'))
-                        files.extend(assignment_files)
-            elif assignments and isinstance(assignments, dict) and "errorcode" in assignments:
-                current_app.logger.warning(f"Assignment API error: {assignments.get('message', 'Unknown error')}")
-        except Exception as e:
-            current_app.logger.error(f"Error getting assignments for course {course_id}: {e}")
-        
-        # Method 3: Try to get course files using different APIs
-        try:
-            # Get course files using the files API
-            course_files = moodle_api_call("core_files_get_files", {
-                "contextid": course_id,
-                "component": "course",
-                "filearea": "content"
-            })
-            if course_files and isinstance(course_files, dict) and "files" in course_files:
-                for file_info in course_files["files"]:
-                    file_info['course_context'] = f"Course {course_id} content"
-                    files.append(file_info)
-        except Exception as e:
-            current_app.logger.debug(f"Course files API not available or error: {e}")
-    
-    except Exception as e:
-        current_app.logger.error(f"Error getting course files for user {user_id} in course {course_id}: {e}")
-    
-    current_app.logger.info(f"Found {len(files)} course files for user {user_id} in course {course_id}")
-    return files
 
-
-def get_assignment_user_files(user_id: int, assignment_id: int, assignment_name: str):
-    """Get files from a specific assignment for a user."""
-    files = []
-    
-    try:
-        current_app.logger.info(f"Getting submissions for assignment {assignment_id}, user {user_id}")
-        
-        # Get user submissions for this assignment
-        submissions = moodle_api_call("mod_assign_get_submissions", {
-            "assignmentids": [assignment_id]
-        })
-        
-        if submissions and isinstance(submissions, dict) and 'assignments' in submissions:
-            for assign in submissions['assignments']:
-                for submission in assign.get('submissions', []):
-                    if submission.get('userid') == user_id:
-                        current_app.logger.info(f"Found submission for user {user_id} in assignment {assignment_id}")
-                        # Process submission files
-                        for plugin in submission.get('plugins', []):
-                            if plugin.get('type') == 'file':
-                                for file_area in plugin.get('fileareas', []):
-                                    for file_info in file_area.get('files', []):
-                                        file_info['assignment_context'] = f"Assignment: {assignment_name}"
-                                        files.append(file_info)
-        elif submissions and isinstance(submissions, dict) and "errorcode" in submissions:
-            current_app.logger.warning(f"Submission API error for assignment {assignment_id}: {submissions.get('message', 'Unknown error')}")
-            
-    except Exception as e:
-        current_app.logger.error(f"Error getting assignment files for user {user_id}, assignment {assignment_id}: {e}")
-    
-    return files
 
 
 def get_courses():
@@ -460,16 +470,27 @@ def debug_user_files(user_id: int):
     results = {}
     course_id = request.args.get("course_id", type=int) or session.get("context_id")
     
-    # Test different API calls with error handling
+    # Test the APIs that are actually available
     try:
-        results["private_files"] = moodle_api_call("core_files_get_user_files", {"userid": user_id})
+        results["private_files_info"] = moodle_api_call("core_user_get_private_files_info", {"userid": user_id})
     except Exception as e:
-        results["private_files"] = {"error": str(e)}
+        results["private_files_info"] = {"error": str(e)}
     
     try:
         results["user_courses"] = moodle_api_call("core_enrol_get_users_courses", {"userid": user_id})
     except Exception as e:
         results["user_courses"] = {"error": str(e)}
+    
+    # Try getting user files using core_files_get_files
+    try:
+        results["user_files_direct"] = moodle_api_call("core_files_get_files", {
+            "contextlevel": 30,  # CONTEXT_USER
+            "instanceid": user_id,
+            "component": "user",
+            "filearea": "private"
+        })
+    except Exception as e:
+        results["user_files_direct"] = {"error": str(e)}
     
     # Try getting files from user's courses
     if course_id:
@@ -483,98 +504,109 @@ def debug_user_files(user_id: int):
         except Exception as e:
             results["assignments"] = {"error": str(e)}
         
-        # Try getting specific assignment submissions
+        # Test assignment submissions with correct parameters
         if results.get("assignments") and isinstance(results["assignments"], dict) and "courses" in results["assignments"]:
             assignment_submissions = {}
             for course_data in results["assignments"]["courses"]:
                 for assignment in course_data.get("assignments", []):
+                    assignment_id = assignment["id"]
                     try:
-                        assignment_submissions[assignment["id"]] = moodle_api_call("mod_assign_get_submissions", {
-                            "assignmentids": [assignment["id"]]
+                        assignment_submissions[f"assignment_{assignment_id}"] = moodle_api_call("mod_assign_get_submissions", {
+                            "assignmentids": [assignment_id]
                         })
                     except Exception as e:
-                        assignment_submissions[assignment["id"]] = {"error": str(e)}
+                        assignment_submissions[f"assignment_{assignment_id}"] = {"error": str(e)}
             results["assignment_submissions"] = assignment_submissions
-        
-        # Try direct assignment submission check based on course content
-        if results.get("course_contents"):
-            direct_assignment_checks = {}
-            for section in results["course_contents"]:
-                if isinstance(section, dict):
-                    for module in section.get('modules', []):
-                        if module.get('modname') == 'assign':
-                            assignment_instance = module.get('instance')
-                            if assignment_instance:
-                                try:
-                                    # Try multiple approaches to get assignment data
-                                    direct_assignment_checks[f"assign_{assignment_instance}"] = {
-                                        "assignment_info": moodle_api_call("mod_assign_get_assignments", {"assignmentids": [assignment_instance]}),
-                                        "submissions": moodle_api_call("mod_assign_get_submissions", {"assignmentids": [assignment_instance]}),
-                                        "user_status": moodle_api_call("mod_assign_get_user_flags", {"assignmentids": [assignment_instance]})
-                                    }
-                                except Exception as e:
-                                    direct_assignment_checks[f"assign_{assignment_instance}"] = {"error": str(e)}
-            results["direct_assignment_checks"] = direct_assignment_checks
     
-    # Try alternative file APIs
-    try:
-        results["available_functions"] = moodle_api_call("core_webservice_get_site_info")
-    except Exception as e:
-        results["available_functions"] = {"error": str(e)}
-    
-    # Show what our enhanced function finds
+    # Test our enhanced search function
     try:
         results["enhanced_search_results"] = get_user_files(user_id, course_id)
     except Exception as e:
         results["enhanced_search_results"] = {"error": str(e)}
     
+    # Test getting user info
+    try:
+        results["user_info"] = moodle_api_call("core_user_get_users_by_field", {
+            "field": "id", 
+            "values": [user_id]
+        })
+    except Exception as e:
+        results["user_info"] = {"error": str(e)}
+    
     return jsonify(results)
 
 
-@files_bp.route("/check_assignment_submissions/<int:user_id>/<int:course_id>")
-def check_assignment_submissions(user_id: int, course_id: int):
-    """Specific route to check assignment submissions for a user."""
+@files_bp.route("/test_file_apis/<int:user_id>")
+def test_file_apis(user_id: int):
+    """Simple test route to verify which file APIs work."""
     if not is_admin_user(session.get("roles", [])):
         return jsonify({"error": "forbidden"}), 403
     
-    results = {"submissions": [], "errors": []}
+    results = {"working_apis": [], "failed_apis": []}
     
+    # Test 1: Private files info
     try:
-        # Get course content to find assignments
-        course_content = moodle_api_call("core_course_get_contents", {"courseid": course_id})
-        if course_content:
-            for section in course_content:
-                for module in section.get('modules', []):
-                    if module.get('modname') == 'assign':
-                        assignment_instance = module.get('instance')
-                        assignment_name = module.get('name', 'Unknown Assignment')
-                        
-                        try:
-                            # Get submissions for this specific assignment
-                            submissions = moodle_api_call("mod_assign_get_submissions", {
-                                "assignmentids": [assignment_instance]
-                            })
-                            
-                            if submissions and 'assignments' in submissions:
-                                for assign in submissions['assignments']:
-                                    for submission in assign.get('submissions', []):
-                                        if submission.get('userid') == user_id:
-                                            submission_info = {
-                                                "assignment_name": assignment_name,
-                                                "assignment_id": assignment_instance,
-                                                "submission_id": submission.get('id'),
-                                                "status": submission.get('status'),
-                                                "plugins": submission.get('plugins', []),
-                                                "timemodified": submission.get('timemodified'),
-                                            }
-                                            results["submissions"].append(submission_info)
-                        except Exception as e:
-                            results["errors"].append(f"Error checking assignment {assignment_instance}: {str(e)}")
+        private_info = moodle_api_call("core_user_get_private_files_info", {"userid": user_id})
+        if private_info and "errorcode" not in private_info:
+            results["working_apis"].append("core_user_get_private_files_info")
+            results["private_files_info"] = private_info
+        else:
+            results["failed_apis"].append("core_user_get_private_files_info")
+    except:
+        results["failed_apis"].append("core_user_get_private_files_info")
     
-    except Exception as e:
-        results["errors"].append(f"Error getting course content: {str(e)}")
+    # Test 2: Direct user files
+    try:
+        user_files = moodle_api_call("core_files_get_files", {
+            "contextlevel": 30,
+            "instanceid": user_id,
+            "component": "user",
+            "filearea": "private"
+        })
+        if user_files and "errorcode" not in user_files:
+            results["working_apis"].append("core_files_get_files (user context)")
+            results["user_files_count"] = len(user_files.get("files", []))
+        else:
+            results["failed_apis"].append("core_files_get_files (user context)")
+    except:
+        results["failed_apis"].append("core_files_get_files (user context)")
+    
+    # Test 3: User courses
+    try:
+        courses = moodle_api_call("core_enrol_get_users_courses", {"userid": user_id})
+        if courses and "errorcode" not in courses:
+            results["working_apis"].append("core_enrol_get_users_courses")
+            results["courses_count"] = len(courses)
+        else:
+            results["failed_apis"].append("core_enrol_get_users_courses")
+    except:
+        results["failed_apis"].append("core_enrol_get_users_courses")
     
     return jsonify(results)
+
+
+@files_bp.route("/list_moodle_functions")
+def list_moodle_functions():
+    """List all available Moodle web service functions."""
+    if not is_admin_user(session.get("roles", [])):
+        return jsonify({"error": "forbidden"}), 403
+    
+    try:
+        site_info = moodle_api_call("core_webservice_get_site_info")
+        if site_info and "functions" in site_info:
+            # Filter to file-related functions
+            file_functions = [
+                f for f in site_info["functions"] 
+                if "file" in f["name"].lower() or "user" in f["name"].lower()
+            ]
+            return jsonify({
+                "total_functions": len(site_info["functions"]),
+                "file_related_functions": file_functions
+            })
+        else:
+            return jsonify({"error": "Could not get site info"})
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 
 @files_bp.route("/copy_moodle_files", methods=["POST"])
@@ -891,8 +923,11 @@ def file_browser():
                 <a href="{{ url_for('files.debug_user_files', user_id=selected_user) }}?course_id={{ course_id }}&ltik={{ ltik }}" target="_blank">
                     View Raw API Debug Data
                 </a> | 
-                <a href="{{ url_for('files.check_assignment_submissions', user_id=selected_user, course_id=course_id) }}?ltik={{ ltik }}" target="_blank">
-                    Check Assignment Submissions
+                <a href="{{ url_for('files.test_file_apis', user_id=selected_user) }}?ltik={{ ltik }}" target="_blank">
+                    Test File APIs
+                </a> | 
+                <a href="{{ url_for('files.list_moodle_functions') }}?ltik={{ ltik }}" target="_blank">
+                    List Available Functions
                 </a>
             </div>
 
