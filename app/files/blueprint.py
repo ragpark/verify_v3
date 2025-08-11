@@ -317,7 +317,11 @@ def get_assignment_files(user_id: int, course_id: int):
                     )
 
                     if status_response and not isinstance(status_response, str):
-                        if isinstance(status_response, dict) and "errorcode" not in status_response:
+                        if isinstance(status_response, dict) and "errorcode" in status_response:
+                            current_app.logger.error(
+                                f"Error getting submission status for assignment {assignment_id}: {status_response.get('errorcode')}"
+                            )
+                        elif isinstance(status_response, dict) and "errorcode" not in status_response:
                             if "lastattempt" in status_response:
                                 submission = status_response["lastattempt"].get("submission", {})
 
@@ -880,7 +884,7 @@ def _encode_moodle_params(params: dict) -> dict:
     return encoded
 
 
-@files_bp.route("/file_browser")
+@files_bp.route("/file_browser", methods=["GET", "POST"])
 def file_browser():
     roles = session.get("roles", [])
     session_user = int(session.get("user_id"))
@@ -1047,6 +1051,23 @@ def file_browser():
         moodle_files = get_user_files(selected_user, course_id)
         local_files = [f for f in FILE_METADATA.values() if f.get("owner") == selected_user]
 
+        uploaded = None
+        if request.method == "POST":
+            selected = request.form.getlist("files")
+            upload_dir = current_app.config.get("UPLOAD_FOLDER", "/tmp/lti_files")
+            os.makedirs(upload_dir, exist_ok=True)
+            uploaded = 0
+            for url in selected:
+                try:
+                    resp = requests.get(url, timeout=10)
+                    resp.raise_for_status()
+                    filename = url.rsplit("/", 1)[-1].split("?")[0]
+                    with open(os.path.join(upload_dir, filename), "wb") as handle:
+                        handle.write(resp.content)
+                    uploaded += 1
+                except Exception as err:  # pragma: no cover - network errors
+                    current_app.logger.error(f"Failed to download {url}: {err}")
+
         back_url = url_for('files.file_browser', course_id=selected_course, ltik=ltik) if selected_course \
             else url_for('files.file_browser', ltik=ltik)
 
@@ -1057,10 +1078,10 @@ def file_browser():
             <style>
                 body { font-family: Arial, sans-serif; margin: 20px; }
                 .file-section { margin: 20px 0; }
-                .file-item { 
-                    border: 1px solid #ddd; 
-                    padding: 10px; 
-                    margin: 5px 0; 
+                .file-item {
+                    border: 1px solid #ddd;
+                    padding: 10px;
+                    margin: 5px 0;
                     border-radius: 3px;
                     background: #f9f9f9;
                 }
@@ -1078,7 +1099,7 @@ def file_browser():
         <body>
             <h1>User {{ selected_user }} Files</h1>
             <p><a href="{{ back_url }}">&larr; Back to user list</a></p>
-            
+
             <div class="info-box">
                 <strong>File Sources:</strong>
                 Assignments: {{ "✓" if FILE_SOURCE_CONFIG.get("assignments") else "✗" }} |
@@ -1089,21 +1110,28 @@ def file_browser():
 
             <div class="file-section">
                 <h2>Moodle Files ({{ moodle_files|length }})</h2>
+                {% if uploaded is not none %}
+                    <p>{{ uploaded }} file(s) uploaded.</p>
+                {% endif %}
                 {% if not moodle_files %}
                     <p>No Moodle files found for this user.</p>
                 {% else %}
+                <form method="post" action="{{ url_for('files.file_browser', user_id=selected_user, course_id=course_id, ltik=ltik) }}">
                     {% for f in moodle_files %}
                     <div class="file-item">
+                        <input type="checkbox" name="files" value="{{ f.fileurl }}?token={{ token }}" />
                         <strong>{{ f.filename or 'Unnamed file' }}</strong>
                         {% if f.fileurl %}
                             - <a href="{{ f.fileurl }}?token={{ token }}" target="_blank" rel="noopener">Open</a>
                         {% endif %}
                         <div class="file-details">
-                            Size: {{ f.filesize or 'Unknown' }} bytes | 
+                            Size: {{ f.filesize or 'Unknown' }} bytes |
                             Source: {{ f.source or 'Unknown' }}
                         </div>
                     </div>
                     {% endfor %}
+                    <button type="submit">Upload Selected</button>
+                </form>
                 {% endif %}
             </div>
 
@@ -1132,6 +1160,7 @@ def file_browser():
             token=token,
             back_url=back_url,
             course_id=course_id,
+            uploaded=uploaded,
             FILE_SOURCE_CONFIG=FILE_SOURCE_CONFIG
         )
 

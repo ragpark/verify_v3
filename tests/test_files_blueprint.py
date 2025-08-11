@@ -68,8 +68,8 @@ def test_require_session_redirects_with_placeholder_hint(client, monkeypatch):
 def test_require_session_returns_html_error(client):
     resp = client.get("/files/get_user_files/1", headers={"Accept": "application/json"})
     assert resp.status_code == 401
-    assert "text/html" in resp.headers.get("Content-Type", "")
-    assert b"Unauthorized" in resp.data
+    assert "application/json" in resp.headers.get("Content-Type", "")
+    assert b"No active LTI session" in resp.data
 
 
 def test_admin_file_browser_lists_students(client, monkeypatch):
@@ -135,3 +135,42 @@ def test_admin_sees_user_uploads(client):
     resp = client.get("/files/file_browser?user_id=10")
     assert resp.status_code == 200
     assert b"hello.txt" in resp.data
+
+
+def test_admin_can_upload_selected_files(client, tmp_path, monkeypatch):
+    """Admin selects remote files and they are saved locally."""
+    with client.session_transaction() as sess:
+        sess["user_id"] = 1
+        sess["roles"] = ["urn:lti:role:ims/lis/Instructor"]
+
+    # Ensure uploads go to temporary directory
+    client.application.config["UPLOAD_FOLDER"] = str(tmp_path)
+
+    # Stub Moodle file listing
+    monkeypatch.setattr(
+        "app.files.blueprint.get_user_files",
+        lambda user_id, course_id=None: [
+            {
+                "filename": "remote.txt",
+                "fileurl": "http://example.com/remote.txt",
+                "filesize": 5,
+                "source": "Assignment",
+            }
+        ],
+    )
+
+    class FakeResp:
+        def __init__(self):
+            self.content = b"hello"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("app.files.blueprint.requests.get", lambda url, timeout=10: FakeResp())
+
+    resp = client.post(
+        "/files/file_browser?user_id=10",
+        data={"files": ["http://example.com/remote.txt"]},
+    )
+    assert resp.status_code == 200
+    assert (tmp_path / "remote.txt").exists()
