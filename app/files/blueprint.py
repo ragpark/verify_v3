@@ -47,22 +47,12 @@ def _moodle_config():
     """Resolve Moodle configuration with fallbacks and light validation."""
     base_url = os.getenv("MOODLE_URL") or os.getenv("MOODLE_BASE_URL")
     token = os.getenv("MOODLE_API_TOKEN") or os.getenv("MOODLE_TOKEN")
-    course_id = (
-        request.args.get("course_id")
-        or current_app.config.get("MOODLE_COURSE_ID")
-        or os.getenv("MOODLE_COURSE_ID")
-    )
-    # Normalise course_id to int when possible
-    try:
-        course_id_int = int(course_id) if course_id is not None else None
-    except (TypeError, ValueError):
-        course_id_int = None
-    return base_url, token, course_id_int
+    return base_url, token
 
 
 def moodle_api_call(function: str, params: dict | None = None):
     """Generic Moodle REST API wrapper."""
-    base_url, token, _ = _moodle_config()
+    base_url, token = _moodle_config()
     if not base_url or not token:
         current_app.logger.error("Moodle configuration missing (base_url or token).")
         return None
@@ -81,30 +71,42 @@ def moodle_api_call(function: str, params: dict | None = None):
         return None
 
 
-def get_user_files(user_id: int, course_id: int | None = None):
-    params: dict[str, int] = {"userid": user_id}
-    if course_id:
-        params["courseid"] = course_id
-    data = moodle_api_call("core_files_get_user_files", params)
+def get_user_files(user_id: int):
+    """Return all files for a user (no course constraint)."""
+    data = moodle_api_call("core_files_get_user_files", {"userid": user_id})
     return data.get("files", []) if data else []
 
 
-def get_learners_in_course(course_id: int):
-    data = moodle_api_call("core_enrol_get_enrolled_users", {"courseid": course_id})
+def get_all_users(limit=200, offset=0):
+    """
+    Return a list of Moodle users (site-wide).
+    Note: Moodle roles are context-based; without a course we cannot
+    reliably filter to just 'students', so we list all users.
+    """
+    criteria = []  # empty -> all users (subject to limit)
+    data = moodle_api_call(
+        "core_user_get_users",
+        {"criteria": criteria, "limitfrom": offset, "limitnum": limit},
+    )
     if not data:
         return []
+    # Normalise to a minimal shape like enrolled users API
     return [
-        u for u in data
-        if any((r.get("shortname") or "").lower() == "student" for r in u.get("roles", []))
+        {
+            "id": u.get("id"),
+            "fullname": f"{u.get('fullname') or (u.get('firstname','') + ' ' + u.get('lastname','')).strip()}".strip()
+        }
+        for u in data.get("users", [])
     ]
 
 
 def download_moodle_file(file_url: str, token: str | None = None):
-    _, fallback_token, _ = _moodle_config()
+    base_url, fallback_token = _moodle_config()
     token = token or fallback_token
     if not token:
         current_app.logger.error("Cannot download Moodle file: missing token.")
         return None
+    # file_url already contains pluginfile path; append token
     try:
         resp = requests.get(f"{file_url}?token={token}", timeout=10)
         resp.raise_for_status()
@@ -212,8 +214,7 @@ def _require_session():
 
 @files_bp.route("/get_user_files/<int:user_id>")
 def get_user_files_route(user_id: int):
-    _, _, course_id = _moodle_config()
-    files = get_user_files(user_id, course_id)
+    files = get_user_files(user_id)
     return jsonify(files)
 
 
@@ -301,27 +302,26 @@ def file_browser():
     selected_user = request.args.get("user_id", type=int)
     ltik = getattr(g, "ltik", request.args.get("ltik"))
 
-    base_url, token, course_id = _moodle_config()
+    base_url, token = _moodle_config()
 
-    # If admin with no user selected, show list of students from Moodle
+    # Admin with no user selected: list all Moodle users
     if admin and not selected_user:
-        students = get_learners_in_course(course_id) if course_id else []
+        users = get_all_users()
         html = """
         <html>
         <head><title>File Browser</title></head>
         <body>
             <h1>File Browser</h1>
-            {% if not (base_url and token and course_id) %}
+            {% if not (base_url and token) %}
               <p><strong>Note:</strong> Moodle configuration incomplete.
-              Set MOODLE_URL (or MOODLE_BASE_URL), MOODLE_API_TOKEN (or MOODLE_TOKEN),
-              and MOODLE_COURSE_ID.</p>
+              Set MOODLE_URL (or MOODLE_BASE_URL) and MOODLE_API_TOKEN (or MOODLE_TOKEN).</p>
             {% endif %}
-            <p>Select a student to view uploaded files.</p>
+            <p>Select a user to view Moodle files.</p>
             <ul>
-            {% for s in students %}
+            {% for u in users %}
                 <li>
-                  <a href="{{ url_for('files.file_browser') }}?user_id={{ s.id }}&ltik={{ ltik }}">  <!-- FIXED: ltik param -->
-                  {{ s.fullname }}
+                  <a href="{{ url_for('files.file_browser') }}?user_id={{ u.id }}&ltik={{ ltik }}">
+                    {{ u.fullname or ('User ' ~ u.id) }}
                   </a>
                 </li>
             {% endfor %}
@@ -329,16 +329,63 @@ def file_browser():
         </body>
         </html>
         """
-        # NOTE: we intentionally render the HTML entity fix below
-        html = html.replace("&ltik=", "ltik=")  # ensure correct query param
+        html = html.replace("&ltik=", "ltik=")
         return render_template_string(
-            html, students=students, admin=admin, ltik=ltik, base_url=base_url, token=token, course_id=course_id
+            html, users=users, admin=admin, ltik=ltik, base_url=base_url, token=token
         )
 
-    # Otherwise, show local uploads for the selected user (or self)
-    target_user = selected_user if admin and selected_user else session_user
-    files = [f for f in FILE_METADATA.values() if f.get("owner") == target_user]
+    # Admin + user selected: show that user's Moodle files and local uploads
+    if admin and selected_user:
+        moodle_files = get_user_files(selected_user)
+        local_files = [f for f in FILE_METADATA.values() if f.get("owner") == selected_user]
+        html = """
+        <html>
+        <head><title>User Files</title></head>
+        <body>
+            <h1>User {{ selected_user }} Files</h1>
+            <p><a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">Back to users</a></p>
 
+            <h2>Moodle files</h2>
+            {% if not moodle_files %}
+              <p>No Moodle files found for this user.</p>
+            {% else %}
+              <ul>
+                {% for f in moodle_files if not f.isdir %}
+                  <li>
+                    {{ f.filename }}
+                    {% if f.fileurl %}
+                      - <a href="{{ f.fileurl }}?token={{ token }}" target="_blank" rel="noopener">Open</a>
+                    {% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+
+            <h2>Local uploads</h2>
+            {% if not local_files %}
+              <p>No local uploads for this user.</p>
+            {% else %}
+              <ul>
+                {% for f in local_files %}
+                  <li>{{ f.filename }} - <a href="{{ url_for('files.download_file', file_id=f.id) }}?ltik={{ ltik }}">Download</a></li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+        </body>
+        </html>
+        """
+        return render_template_string(
+            html,
+            selected_user=selected_user,
+            moodle_files=moodle_files,
+            local_files=local_files,
+            ltik=ltik,
+            token=token,
+        )
+
+    # Non-admin: show own local uploads (unchanged)
+    target_user = session_user
+    files = [f for f in FILE_METADATA.values() if f.get("owner") == target_user]
     html = """
     <html>
     <head>
@@ -346,13 +393,7 @@ def file_browser():
     </head>
     <body>
         <h1>File Browser</h1>
-        {% if admin and selected_user %}
-        <p><a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">Back to students</a></p>
-        {% elif admin %}
-        <p>Admin interface</p>
-        {% else %}
         <p>Student interface</p>
-        {% endif %}
 
         <ul>
         {% for f in files %}
@@ -360,20 +401,12 @@ def file_browser():
         {% endfor %}
         </ul>
 
-        {% if not admin %}
         <form action="{{ url_for('files.upload_files') }}?ltik={{ ltik }}" method="post" enctype="multipart/form-data">
             <input type="hidden" name="ltik" value="{{ ltik }}"/>
             <input type="file" name="file"/>
             <button type="submit">Upload</button>
         </form>
-        {% endif %}
     </body>
     </html>
     """
-    return render_template_string(
-        html,
-        files=files,
-        admin=admin,
-        ltik=ltik,
-        selected_user=selected_user,
-    )
+    return render_template_string(html, files=files, ltik=ltik)
