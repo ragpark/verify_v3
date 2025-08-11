@@ -136,14 +136,23 @@ def _require_session():
     if _ensure_lti_session():
         return None
 
+    html = """
+    <h1>Unauthorized</h1>
+    <p>No active LTI session. Please launch this tool from your LMS.</p>
+    """
+
     # API clients that explicitly request JSON get an HTML error page
     # instead of a JSON payload so the response is more user-friendly.
     if request.headers.get("Accept") == "application/json":
-        html = """
-        <h1>Unauthorized</h1>
-        <p>No active LTI session. Please launch this tool from your LMS.</p>
-        """
         return render_template_string(html), 401
+
+    login_hint = request.args.get("login_hint")
+    if not login_hint:
+        placeholder = os.getenv("MOODLE_PLACEHOLDER_HINT")
+        if placeholder:
+            login_hint = placeholder
+        else:
+            return render_template_string(html), 401
 
     # Otherwise redirect to the LTI login endpoint to re-establish session
     # before hitting the requested URL. Include the platform issuer so the
@@ -155,9 +164,12 @@ def _require_session():
                 "lti.login",
                 target_link_uri=request.url,
                 iss=platform.issuer,
+                login_hint=login_hint,
             )
         )
-    return redirect(url_for("lti.login", target_link_uri=request.url))
+    return redirect(
+        url_for("lti.login", target_link_uri=request.url, login_hint=login_hint)
+    )
 
 
 @files_bp.route("/get_user_files/<int:user_id>")
