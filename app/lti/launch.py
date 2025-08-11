@@ -717,9 +717,9 @@ def _fetch_moodle_students_and_files():
 def student_files():
     """Display Moodle students and allow uploading their files to local storage."""
     uploaded = None
+    upload_dir = current_app.config.get("UPLOAD_FOLDER", "/tmp/lti_files")
     if request.method == "POST":
         selected = request.form.getlist("files")
-        upload_dir = current_app.config.get("UPLOAD_FOLDER", "/tmp/lti_files")
         os.makedirs(upload_dir, exist_ok=True)
         uploaded = 0
         for file_url in selected:
@@ -734,5 +734,14 @@ def student_files():
             except Exception as err:  # pragma: no cover
                 current_app.logger.error(f"Failed to download {file_url}: {err}")
 
+    uploaded_files = []
+    if os.path.isdir(upload_dir):
+        uploaded_files = sorted(os.listdir(upload_dir))
+
     students = _fetch_moodle_students_and_files()
-    return render_template("student_files.html", students=students, uploaded=uploaded)
+    return render_template(
+        "student_files.html",
+        students=students,
+        uploaded=uploaded,
+        uploaded_files=uploaded_files,
+    )

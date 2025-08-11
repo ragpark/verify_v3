@@ -1051,10 +1051,10 @@ def file_browser():
         moodle_files = get_user_files(selected_user, course_id)
         local_files = [f for f in FILE_METADATA.values() if f.get("owner") == selected_user]
 
+        upload_dir = current_app.config.get("UPLOAD_FOLDER", "/tmp/lti_files")
         uploaded = None
         if request.method == "POST":
             selected = request.form.getlist("files")
-            upload_dir = current_app.config.get("UPLOAD_FOLDER", "/tmp/lti_files")
             os.makedirs(upload_dir, exist_ok=True)
             uploaded = 0
             for url in selected:
@@ -1067,6 +1067,10 @@ def file_browser():
                     uploaded += 1
                 except Exception as err:  # pragma: no cover - network errors
                     current_app.logger.error(f"Failed to download {url}: {err}")
+
+        uploaded_files = []
+        if os.path.isdir(upload_dir):
+            uploaded_files = sorted(os.listdir(upload_dir))
 
         back_url = url_for('files.file_browser', course_id=selected_course, ltik=ltik) if selected_course \
             else url_for('files.file_browser', ltik=ltik)
@@ -1148,6 +1152,19 @@ def file_browser():
                     {% endfor %}
                 {% endif %}
             </div>
+
+            <div class="file-section">
+                <h2>Uploaded to Destination ({{ uploaded_files|length }})</h2>
+                {% if not uploaded_files %}
+                    <p>No files uploaded to destination.</p>
+                {% else %}
+                    <ul>
+                    {% for name in uploaded_files %}
+                        <li>{{ name }}</li>
+                    {% endfor %}
+                    </ul>
+                {% endif %}
+            </div>
         </body>
         </html>
         """
@@ -1156,6 +1173,7 @@ def file_browser():
             selected_user=selected_user,
             moodle_files=moodle_files,
             local_files=local_files,
+            uploaded_files=uploaded_files,
             ltik=ltik,
             token=token,
             back_url=back_url,

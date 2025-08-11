@@ -174,3 +174,28 @@ def test_admin_can_upload_selected_files(client, tmp_path, monkeypatch):
     )
     assert resp.status_code == 200
     assert (tmp_path / "remote.txt").exists()
+    assert b"remote.txt" in resp.data
+
+
+def test_student_files_shows_uploaded_list(client, tmp_path, monkeypatch):
+    client.application.config["UPLOAD_FOLDER"] = str(tmp_path)
+
+    monkeypatch.setattr("app.lti.launch._fetch_moodle_students_and_files", lambda: [])
+
+    class FakeResp:
+        def __init__(self):
+            self.content = b"data"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("app.lti.launch.requests.get", lambda url, timeout=10: FakeResp())
+
+    resp = client.post(
+        "/lti/student_files",
+        data={"files": ["http://example.com/loaded.txt"]},
+    )
+    assert resp.status_code == 200
+    assert (tmp_path / "loaded.txt").exists()
+    assert b"loaded.txt" in resp.data
+
