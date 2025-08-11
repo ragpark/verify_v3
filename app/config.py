@@ -32,5 +32,10 @@ class Config:
     NONCE_EXPIRATION = timedelta(minutes=5)
 
     # Ensure session cookies work within an iframe when launched from an LMS
-    SESSION_COOKIE_SAMESITE = "None"
-    SESSION_COOKIE_SECURE = True
+    # config.py (or app.config[...] in your factory)
+    SESSION_COOKIE_NAME = "verifyv3_session"
+    SESSION_COOKIE_SECURE = True              # site is https on Railway
+    SESSION_COOKIE_SAMESITE = "None"          # allow in iframes
+    SESSION_COOKIE_HTTPONLY = True
+    # If you set a domain, ensure it matches exactly the tool's host.
+    # Avoid setting SESSION_COOKIE_DOMAIN unless you really need it.
