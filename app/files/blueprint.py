@@ -373,7 +373,12 @@ def copy_moodle_files():
         path = os.path.join(folder, filename)
         with open(path, "wb") as handle:
             handle.write(content)
-        info = {"id": file_id, "filename": filename, "path": path, "owner": session.get("user_id")}
+        info = {
+            "id": file_id,
+            "filename": filename,
+            "path": path,
+            "owner": int(session.get("user_id")),
+        }
         save_file_metadata(info)
         saved.append(file_id)
     return jsonify({"saved": saved})
@@ -391,7 +396,12 @@ def upload_files():
     file_id = uuid.uuid4().hex
     path = os.path.join(folder, filename)
     file.save(path)
-    info = {"id": file_id, "filename": filename, "path": path, "owner": session.get("user_id")}
+    info = {
+        "id": file_id,
+        "filename": filename,
+        "path": path,
+        "owner": int(session.get("user_id")),
+    }
     save_file_metadata(info)
     return jsonify(info)
 
@@ -423,7 +433,7 @@ def delete_file(file_id: str):
 @files_bp.route("/list_uploaded_files")
 def list_uploaded_files():
     roles = session.get("roles", [])
-    user_id = session.get("user_id")
+    user_id = int(session.get("user_id"))
     if is_admin_user(roles):
         files = list(FILE_METADATA.values())
     else:
@@ -434,7 +444,7 @@ def list_uploaded_files():
 @files_bp.route("/file_browser")
 def file_browser():
     roles = session.get("roles", [])
-    session_user = session.get("user_id")
+    session_user = int(session.get("user_id"))
     admin = is_admin_user(roles)
     selected_user = request.args.get("user_id", type=int)
     selected_course = request.args.get("course_id", type=int)
