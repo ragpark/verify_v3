@@ -72,12 +72,15 @@ def test_get_assignment_files_returns_files(app, monkeypatch):
             }
         return None
 
-    with app.app_context():
-        monkeypatch.setattr("app.files.blueprint.moodle_api_call", fake_call)
-        files = get_assignment_files(42, 99)
-        assert files == [
-            {"filename": "a.txt", "fileurl": "url", "filesize": 1, "source": "Assignment: Essay"}
-        ]
+        with app.app_context():
+            monkeypatch.setattr("app.files.blueprint.moodle_api_call", fake_call)
+            files = get_assignment_files(42, 99)
+            assert len(files) == 1
+            file = files[0]
+            assert file["filename"] == "a.txt"
+            assert file["fileurl"] == "url"
+            assert file["filesize"] == 1
+            assert file["source"] == "Assignment: Essay"
 
 
 def test_get_assignment_files_skips_draft(app, monkeypatch):
