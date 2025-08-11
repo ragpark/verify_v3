@@ -83,123 +83,317 @@ def moodle_api_call(function: str, params: dict | None = None):
 def get_user_files(user_id: int, course_id: int = None):
     """
     Return all files for a user across different contexts.
-    Uses available APIs based on your Moodle setup.
+    Note: Moodle doesn't have a generic "get all user files" API,
+    so we need to check specific contexts where files can exist.
     """
     all_files = []
     
-    # 1. Try to get user's private files using available API
-    current_app.logger.info(f"Getting private files for user {user_id}")
-    try:
-        # Try the API that's actually available
-        private_files_info = moodle_api_call("core_user_get_private_files_info", {"userid": user_id})
-        if private_files_info and "errorcode" not in private_files_info:
-            current_app.logger.info(f"Private files info: {private_files_info}")
-            
-        # Try to get actual files using core_files_get_files
-        user_files = moodle_api_call("core_files_get_files", {
-            "contextlevel": 30,  # CONTEXT_USER
-            "instanceid": user_id,
-            "component": "user",
-            "filearea": "private"
-        })
-        
-        if user_files and isinstance(user_files, dict) and "files" in user_files:
-            for file_info in user_files["files"]:
-                file_info['source'] = 'user_private_area'
-                all_files.append(file_info)
-            current_app.logger.info(f"Found {len(user_files['files'])} private files")
-        
-    except Exception as e:
-        current_app.logger.error(f"Error getting private files for user {user_id}: {e}")
-    
-    # 2. Get course module files
-    if course_id:
-        course_files = get_course_module_files(course_id)
-        all_files.extend(course_files)
-    
-    # 3. Get assignment submission files
+    # 1. Get assignment submission files (most common for student files)
     if course_id:
         assignment_files = get_assignment_files(user_id, course_id)
         all_files.extend(assignment_files)
     
-    # 4. Get files from enrolled courses
-    enrolled_courses = get_user_courses(user_id)
-    for course in enrolled_courses:
-        if course.get('id') != course_id:  # Avoid duplicates
-            course_files = get_course_module_files(course.get('id'))
-            all_files.extend(course_files)
-            
+    # 2. Get files from enrolled courses (if no specific course provided)
+    if not course_id:
+        enrolled_courses = get_user_courses(user_id)
+        for course in enrolled_courses:
+            # Get assignment files for each course
             assignment_files = get_assignment_files(user_id, course.get('id'))
             all_files.extend(assignment_files)
+            
+            # Get course resources (if user has access)
+            course_files = get_course_module_files(course.get('id'), user_id)
+            all_files.extend(course_files)
+    else:
+        # Get course resources for specific course
+        course_files = get_course_module_files(course_id, user_id)
+        all_files.extend(course_files)
     
-    # Remove duplicates
+    # 3. Get forum attachment files (if needed)
+    if course_id:
+        forum_files = get_forum_files(user_id, course_id)
+        all_files.extend(forum_files)
+    
+    # 4. Get workshop submission files (if using workshops)
+    if course_id:
+        workshop_files = get_workshop_files(user_id, course_id)
+        all_files.extend(workshop_files)
+    
+    # Remove duplicates based on filename and filesize
     seen_files = set()
     unique_files = []
     for file_info in all_files:
-        file_key = file_info.get('fileurl') or f"{file_info.get('filename', '')}-{file_info.get('filesize', 0)}"
+        # Create a unique key for each file
+        file_key = f"{file_info.get('filename', '')}-{file_info.get('filesize', 0)}-{file_info.get('timemodified', 0)}"
         if file_key not in seen_files:
             seen_files.add(file_key)
             unique_files.append(file_info)
     
-    current_app.logger.info(f"Total files for user {user_id}: {len(unique_files)}")
+    current_app.logger.info(f"Total unique files for user {user_id}: {len(unique_files)}")
     return unique_files
 
 
-def get_course_module_files(course_id: int):
-    """Get files from course modules."""
+def get_course_module_files(course_id: int, user_id: int = None):
+    """
+    Get files from course modules (resources, folders, etc.).
+    This includes PDFs, documents, and other resources uploaded by instructors.
+    """
     files = []
     try:
-        course_content = moodle_api_call("core_course_get_contents", {"courseid": course_id})
-        if course_content:
+        # Get course contents with options to include files
+        params = {
+            "courseid": course_id,
+            "options": [
+                {"name": "includestealthmodules", "value": "1"},
+                {"name": "sectionid", "value": "0"},  # All sections
+                {"name": "sectionnumber", "value": "0"},
+                {"name": "cmid", "value": "0"},
+                {"name": "modname", "value": ""},
+                {"name": "modid", "value": "0"}
+            ]
+        }
+        
+        course_content = moodle_api_call("core_course_get_contents", params)
+        
+        if course_content and not isinstance(course_content, dict):  # Should be a list
             for section in course_content:
                 for module in section.get('modules', []):
-                    for file_info in module.get('contents', []):
-                        file_info['source'] = f"Course module: {module.get('name', 'Unknown')}"
-                        files.append(file_info)
+                    # Check if module is visible to user
+                    if module.get('uservisible', False) or module.get('visible', 1) == 1:
+                        # Process different module types
+                        modname = module.get('modname', '')
+                        
+                        if modname in ['resource', 'folder', 'url', 'page']:
+                            # These modules can contain files
+                            for content in module.get('contents', []):
+                                if content.get('type') == 'file':
+                                    file_info = {
+                                        'filename': content.get('filename', 'Unknown'),
+                                        'filesize': content.get('filesize', 0),
+                                        'fileurl': content.get('fileurl', ''),
+                                        'timemodified': content.get('timemodified', 0),
+                                        'mimetype': content.get('mimetype', ''),
+                                        'source': f"Course: {module.get('name', 'Unknown module')}",
+                                        'module_type': modname,
+                                        'module_id': module.get('id', 0)
+                                    }
+                                    files.append(file_info)
+                        
+                        elif modname == 'label':
+                            # Labels might contain embedded files in description
+                            # These are typically inline and not downloadable
+                            pass
+                            
     except Exception as e:
-        current_app.logger.error(f"Error getting course files: {e}")
+        current_app.logger.error(f"Error getting course module files for course {course_id}: {e}")
+    
     return files
 
 
 def get_assignment_files(user_id: int, course_id: int):
-    """Get assignment submission files for a user."""
+    """
+    Get assignment submission files for a user.
+    This is the most reliable way to get student-submitted files.
+    """
     files = []
     try:
-        assignments = moodle_api_call("mod_assign_get_assignments", {"courseids": [course_id]})
-        if assignments and "courses" in assignments:
-            for course_data in assignments["courses"]:
-                for assignment in course_data.get("assignments", []):
-                    assignment_id = assignment.get("id")
-                    status = moodle_api_call(
-                        "mod_assign_get_submission_status",
-                        {"assignid": assignment_id, "userid": user_id},
+        # First, get all assignments in the course
+        assignments_response = moodle_api_call(
+            "mod_assign_get_assignments", 
+            {"courseids": [course_id]}
+        )
+        
+        if not assignments_response or "courses" not in assignments_response:
+            current_app.logger.warning(f"No assignments found for course {course_id}")
+            return files
+        
+        for course_data in assignments_response["courses"]:
+            for assignment in course_data.get("assignments", []):
+                assignment_id = assignment.get("id")
+                assignment_name = assignment.get("name", "Unknown Assignment")
+                
+                try:
+                    # Get the user's submission for this assignment
+                    submissions_response = moodle_api_call(
+                        "mod_assign_get_submissions",
+                        {"assignmentids": [assignment_id], "status": "submitted"}
                     )
-
-                    if not status or "errorcode" in status:
-                        # Permission or other error
-                        if status and status.get("errorcode"):
-                            current_app.logger.error(
-                                "Error getting submission status for assignment %s: %s",
-                                assignment_id,
-                                status,
-                            )
-                        continue
-
-                    lastattempt = status.get("lastattempt", {})
-                    submission = lastattempt.get("submission", {})
-
-                    if not submission or submission.get("status") == "draft":
-                        continue
-
-                    for plugin in submission.get("plugins", []):
-                        if plugin.get("type") != "file":
-                            continue
-                        for file_area in plugin.get("fileareas", []):
-                            for file_info in file_area.get("files", []):
-                                file_info["source"] = f"Assignment: {assignment.get('name')}"
-                                files.append(file_info)
+                    
+                    if submissions_response and "assignments" in submissions_response:
+                        for assign_data in submissions_response["assignments"]:
+                            for submission in assign_data.get("submissions", []):
+                                if submission.get("userid") != user_id:
+                                    continue
+                                
+                                # Process submission plugins
+                                for plugin in submission.get("plugins", []):
+                                    if plugin.get("type") == "file":
+                                        # File submission plugin
+                                        for filearea in plugin.get("fileareas", []):
+                                            for file_info in filearea.get("files", []):
+                                                if file_info.get('filename', '') != '.':  # Skip directory entries
+                                                    file_data = {
+                                                        'filename': file_info.get('filename', 'Unknown'),
+                                                        'filesize': file_info.get('filesize', 0),
+                                                        'fileurl': file_info.get('fileurl', ''),
+                                                        'timemodified': file_info.get('timemodified', 0),
+                                                        'mimetype': file_info.get('mimetype', ''),
+                                                        'source': f"Assignment: {assignment_name}",
+                                                        'submission_status': submission.get('status', ''),
+                                                        'assignment_id': assignment_id
+                                                    }
+                                                    files.append(file_data)
+                                    
+                                    elif plugin.get("type") == "onlinetext":
+                                        # Online text might contain embedded images
+                                        # These would need special handling
+                                        pass
+                
+                except Exception as e:
+                    # Try alternative method using submission status
+                    try:
+                        status_response = moodle_api_call(
+                            "mod_assign_get_submission_status",
+                            {"assignid": assignment_id, "userid": user_id}
+                        )
+                        
+                        if status_response and "lastattempt" in status_response:
+                            submission = status_response["lastattempt"].get("submission", {})
+                            
+                            if submission and submission.get("status") != "new":
+                                for plugin in submission.get("plugins", []):
+                                    if plugin.get("type") == "file":
+                                        for filearea in plugin.get("fileareas", []):
+                                            for file_info in filearea.get("files", []):
+                                                if file_info.get('filename', '') != '.':
+                                                    file_data = {
+                                                        'filename': file_info.get('filename', 'Unknown'),
+                                                        'filesize': file_info.get('filesize', 0),
+                                                        'fileurl': file_info.get('fileurl', ''),
+                                                        'timemodified': file_info.get('timemodified', 0),
+                                                        'mimetype': file_info.get('mimetype', ''),
+                                                        'source': f"Assignment: {assignment_name}",
+                                                        'submission_status': submission.get('status', ''),
+                                                        'assignment_id': assignment_id
+                                                    }
+                                                    files.append(file_data)
+                    except Exception as e2:
+                        current_app.logger.debug(f"Could not get submission status for assignment {assignment_id}, user {user_id}: {e2}")
+                        
     except Exception as e:
-        current_app.logger.error(f"Error getting assignment files: {e}")
+        current_app.logger.error(f"Error getting assignment files for user {user_id} in course {course_id}: {e}")
+    
+    return files
+
+
+def get_forum_files(user_id: int, course_id: int):
+    """
+    Get files attached to forum posts by a user.
+    """
+    files = []
+    try:
+        # Get forums in the course
+        forums_response = moodle_api_call(
+            "mod_forum_get_forums_by_courses",
+            {"courseids": [course_id]}
+        )
+        
+        if forums_response:
+            for forum in forums_response:
+                forum_id = forum.get("id")
+                forum_name = forum.get("name", "Unknown Forum")
+                
+                # Get discussions in the forum
+                discussions_response = moodle_api_call(
+                    "mod_forum_get_forum_discussions",
+                    {"forumid": forum_id}
+                )
+                
+                if discussions_response and "discussions" in discussions_response:
+                    for discussion in discussions_response["discussions"]:
+                        # Check if discussion was started by our user
+                        if discussion.get("userid") == user_id:
+                            # Check for attachments in the discussion
+                            if discussion.get("attachment"):
+                                file_data = {
+                                    'filename': discussion.get('attachment', 'Unknown'),
+                                    'filesize': 0,  # Not provided by API
+                                    'fileurl': '',  # Would need to construct
+                                    'timemodified': discussion.get('timemodified', 0),
+                                    'source': f"Forum: {forum_name}",
+                                    'forum_id': forum_id
+                                }
+                                files.append(file_data)
+                        
+                        # Get posts in the discussion to find user's replies with attachments
+                        posts_response = moodle_api_call(
+                            "mod_forum_get_discussion_posts",
+                            {"discussionid": discussion.get("discussion")}
+                        )
+                        
+                        if posts_response and "posts" in posts_response:
+                            for post in posts_response["posts"]:
+                                if post.get("userid") == user_id and post.get("attachments"):
+                                    for attachment in post["attachments"]:
+                                        file_data = {
+                                            'filename': attachment.get('filename', 'Unknown'),
+                                            'filesize': attachment.get('filesize', 0),
+                                            'fileurl': attachment.get('fileurl', ''),
+                                            'timemodified': attachment.get('timemodified', 0),
+                                            'mimetype': attachment.get('mimetype', ''),
+                                            'source': f"Forum: {forum_name}",
+                                            'forum_id': forum_id
+                                        }
+                                        files.append(file_data)
+                                        
+    except Exception as e:
+        current_app.logger.error(f"Error getting forum files for user {user_id} in course {course_id}: {e}")
+    
+    return files
+
+
+def get_workshop_files(user_id: int, course_id: int):
+    """
+    Get files from workshop submissions.
+    """
+    files = []
+    try:
+        # Get workshops in the course
+        # Note: There's no direct API to list workshops, so we'd need to get them from course modules
+        course_content = moodle_api_call("core_course_get_contents", {"courseid": course_id})
+        
+        if course_content:
+            for section in course_content:
+                for module in section.get('modules', []):
+                    if module.get('modname') == 'workshop':
+                        workshop_id = module.get('instance')
+                        workshop_name = module.get('name', 'Unknown Workshop')
+                        
+                        # Get workshop submissions
+                        submissions_response = moodle_api_call(
+                            "mod_workshop_get_submissions",
+                            {"workshopid": workshop_id}
+                        )
+                        
+                        if submissions_response and "submissions" in submissions_response:
+                            for submission in submissions_response["submissions"]:
+                                if submission.get("authorid") == user_id:
+                                    # Check for attachment files
+                                    for attachment in submission.get("attachments", []):
+                                        file_data = {
+                                            'filename': attachment.get('filename', 'Unknown'),
+                                            'filesize': attachment.get('filesize', 0),
+                                            'fileurl': attachment.get('fileurl', ''),
+                                            'timemodified': submission.get('timemodified', 0),
+                                            'mimetype': attachment.get('mimetype', ''),
+                                            'source': f"Workshop: {workshop_name}",
+                                            'workshop_id': workshop_id
+                                        }
+                                        files.append(file_data)
+                                        
+    except Exception as e:
+        current_app.logger.error(f"Error getting workshop files for user {user_id} in course {course_id}: {e}")
+    
     return files
 
 
@@ -258,24 +452,35 @@ def get_courses():
     return courses
 
 
-def download_moodle_file(file_url: str, token: str | None = None):
+def download_moodle_file(file_url: str, token: str = None):
+    """
+    Download a file from Moodle using the webservice token.
+    File URLs from Moodle typically require token authentication.
+    """
     base_url, fallback_token = _moodle_config()
     token = token or fallback_token
+    
     if not token:
         current_app.logger.error("Cannot download Moodle file: missing token.")
         return None
-    # file_url already contains pluginfile path; append token
+    
     try:
-        current_app.logger.info("Downloading Moodle file %s", file_url)
-        resp = requests.get(f"{file_url}?token={token}", timeout=10)
+        # Moodle file URLs might already have parameters, so check for ? in URL
+        separator = '&' if '?' in file_url else '?'
+        authenticated_url = f"{file_url}{separator}token={token}"
+        
+        current_app.logger.info(f"Downloading Moodle file from: {file_url}")
+        
+        resp = requests.get(authenticated_url, timeout=30)  # Increased timeout for larger files
         resp.raise_for_status()
+        
         content = resp.content
-        current_app.logger.info(
-            "Downloaded Moodle file %s (%d bytes)", file_url, len(content)
-        )
+        current_app.logger.info(f"Downloaded Moodle file: {len(content)} bytes")
+        
         return content
-    except Exception as exc:  # pragma: no cover - network errors
-        current_app.logger.error("Failed downloading Moodle file %s: %s", file_url, exc)
+        
+    except requests.exceptions.RequestException as exc:
+        current_app.logger.error(f"Failed downloading Moodle file {file_url}: {exc}")
         return None
 
 
