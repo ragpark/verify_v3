@@ -603,39 +603,330 @@ def lti_success():
     context_title = session.get("context_title", "Course")
     ltik = request.args.get("ltik")
     html = """
-    <html>
-    <head>
-      <title>SV Assistant</title>
-      <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-        .container { background: white; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; }
-        .card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 4px; }
-        .actions { display: flex; gap: 10px; }
-        .actions a { flex: 1; text-align: center; padding: 10px; background: #007bff; color: #fff; text-decoration: none; border-radius: 4px; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <h2>SV Assistant connected</h2>
-        <p>Welcome <strong>{{user_name}}</strong> to <strong>{{context_title}}</strong> from {{platform}}</p>
+    <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SV Assistant - Connected</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-        <div class="card actions">
-          <a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">Learner Files</a>
-          {% if admin %}
-          <a href="{{ url_for('lti.student_files') }}?ltik={{ ltik }}">IV Files</a>
-          {% endif %}
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #1e293b 0%, #334155 50%, #475569 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
+            max-width: 500px;
+            width: 100%;
+            overflow: hidden;
+            animation: slideUp 0.8s ease-out;
+            border: 1px solid #e2e8f0;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .header {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            padding: 40px 30px;
+            text-align: center;
+            color: white;
+            position: relative;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+
+        .header .subtitle {
+            font-size: 16px;
+            opacity: 0.8;
+            color: #94a3b8;
+            font-weight: 400;
+        }
+
+        .content {
+            padding: 40px 30px;
+        }
+
+        .welcome-card {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 30px;
+            border-left: 4px solid #6366f1;
+            position: relative;
+        }
+
+        .welcome-text {
+            font-size: 18px;
+            color: #1e293b;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .welcome-details {
+            font-size: 15px;
+            color: #64748b;
+            line-height: 1.5;
+        }
+
+        .user-name {
+            color: #6366f1;
+            font-weight: 600;
+        }
+
+        .context-title {
+            color: #059669;
+            font-weight: 600;
+        }
+
+        .platform {
+            color: #7c3aed;
+            font-weight: 500;
+        }
+
+        .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .action-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 18px 24px;
+            background: #6366f1;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 16px;
+            transition: all 0.2s ease;
+            position: relative;
+            border: 1px solid transparent;
+        }
+
+        .action-btn:hover {
+            background: #4f46e5;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        }
+
+        .action-btn.admin {
+            background: #dc2626;
+        }
+
+        .action-btn.admin:hover {
+            background: #b91c1c;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+
+        .btn-icon {
+            width: 20px;
+            height: 20px;
+            background: currentColor;
+            mask-repeat: no-repeat;
+            mask-position: center;
+            mask-size: contain;
+        }
+
+        .btn-icon.files {
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' /%3E%3C/svg%3E");
+        }
+
+        .btn-icon.admin {
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='currentColor'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4' /%3E%3C/svg%3E");
+        }
+
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #ecfdf5;
+            color: #059669;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 20px;
+            border: 1px solid #d1fae5;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #059669;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { 
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% { 
+                opacity: 0.5;
+                transform: scale(1.1);
+            }
+            100% { 
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: 15px;
+            }
+
+            .header {
+                padding: 30px 20px;
+            }
+
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .content {
+                padding: 30px 20px;
+            }
+
+            .welcome-card {
+                padding: 20px;
+            }
+
+            .action-btn {
+                padding: 16px 20px;
+                font-size: 15px;
+            }
+        }
+
+        @media (min-width: 481px) {
+            .actions {
+                flex-direction: row;
+            }
+
+            .action-btn {
+                flex: 1;
+            }
+        }
+
+        /* Accessibility improvements */
+        .action-btn:focus {
+            outline: 2px solid #6366f1;
+            outline-offset: 2px;
+        }
+
+        .action-btn.admin:focus {
+            outline-color: #dc2626;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* Dark mode support */
+        @media (prefers-color-scheme: dark) {
+            .container {
+                background: #1e293b;
+                border-color: #374151;
+            }
+
+            .welcome-card {
+                background: #334155;
+            }
+
+            .welcome-text {
+                color: #f1f5f9;
+            }
+
+            .welcome-details {
+                color: #94a3b8;
+            }
+
+            .status-indicator {
+                background: #064e3b;
+                border-color: #065f46;
+                color: #6ee7b7;
+            }
+
+            .status-dot {
+                background: #6ee7b7;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>SV Assistant</h1>
+            <div class="subtitle">Successfully Connected</div>
         </div>
+        
+        <div class="content">
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                Connected & Ready
+            </div>
 
-        <!--<div class="card">
-          <strong>Session Info:</strong><br>
-          Platform: {{session.platform_issuer}}<br>
-          User ID: {{session.user_id}}<br>
-          Deployment: {{session.deployment_id}}<br>
-          Roles: {{roles}}
-        </div>-->
-      </div>
-    </body>
-    </html>
+            <div class="welcome-card">
+                <div class="welcome-text">Welcome back</div>
+                <div class="welcome-details">
+                    Hello <span class="user-name">{{user_name}}</span>, you're now connected to 
+                    <span class="context-title">{{context_title}}</span> via <span class="platform">{{platform}}</span>
+                </div>
+            </div>
+
+            <div class="actions">
+                <a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}" class="action-btn">
+                    <div class="btn-icon files"></div>
+                    Learner Files
+                </a>
+                {% if admin %}
+                <a href="{{ url_for('lti.student_files') }}?ltik={{ ltik }}" class="action-btn admin">
+                    <div class="btn-icon admin"></div>
+                    IV Files
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</body>
+</html>
     """
     return render_template_string(
         html,
