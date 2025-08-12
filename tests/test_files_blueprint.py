@@ -110,7 +110,9 @@ def test_admin_select_user_lists_files(client):
 
     resp = client.get("/files/file_browser?user_id=10")
     assert resp.status_code == 200
-    assert b"sample.txt" in resp.data
+    body = resp.data.decode()
+    assert "Uploaded to SV Service" in body
+    assert "sample.txt" in body.split("Uploaded to SV Service", 1)[1]
 
 
 def test_admin_sees_user_uploads(client):
@@ -134,7 +136,9 @@ def test_admin_sees_user_uploads(client):
 
     resp = client.get("/files/file_browser?user_id=10")
     assert resp.status_code == 200
-    assert b"hello.txt" in resp.data
+    body = resp.data.decode()
+    assert "Uploaded to SV Service" in body
+    assert "hello.txt" in body.split("Uploaded to SV Service", 1)[1]
 
 
 def test_admin_can_upload_selected_files(client, tmp_path, monkeypatch):
@@ -174,7 +178,9 @@ def test_admin_can_upload_selected_files(client, tmp_path, monkeypatch):
     )
     assert resp.status_code == 200
     assert (tmp_path / "remote.txt").exists()
-    assert b"remote.txt" in resp.data
+    body = resp.data.decode()
+    assert "Uploaded to SV Service" in body
+    assert "remote.txt" in body.split("Uploaded to SV Service", 1)[1]
 
 
 def test_student_files_shows_uploaded_list(client, tmp_path, monkeypatch):
