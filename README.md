@@ -25,12 +25,7 @@ needs to sample course content and learner work for quality assurance.
 2. **Learner Files** – Staff members with instructor or admin roles can select a
    course, choose a learner, and view all files retrieved from Moodle. Selected
    files can be uploaded to the server for later review.
-3. **IV Files** – Administrators can view a combined list of students and their
-   files on a single page, making it easy to upload evidence from multiple
-   learners in one action.
-4. **Student view** – Learners launching the tool see a simple interface that
-   lists their existing uploads and provides a file upload form for submitting
-   evidence.
+3. **IV Files** – Administrators can collect related files relevant to the delivery of the course on a single page, making it easy to upload evidence to the SV portal in one action.
 
 Uploaded files are stored on the application server (default `/tmp/lti_files`)
 and can be downloaded or listed via the file browser endpoints.
