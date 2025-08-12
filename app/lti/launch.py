@@ -605,7 +605,7 @@ def lti_success():
     html = """
     <html>
     <head>
-      <title>LTI Launch Successful</title>
+      <title>SV Assistant</title>
       <style>
         body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
         .container { background: white; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; }
@@ -616,23 +616,23 @@ def lti_success():
     </head>
     <body>
       <div class="container">
-        <h2>LTI Launch Successful</h2>
+        <h2>SV Assistant connected</h2>
         <p>Welcome <strong>{{user_name}}</strong> to <strong>{{context_title}}</strong> from {{platform}}</p>
 
         <div class="card actions">
-          <a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">File Browser</a>
+          <a href="{{ url_for('files.file_browser') }}?ltik={{ ltik }}">Learner Files</a>
           {% if admin %}
-          <a href="{{ url_for('lti.student_files') }}?ltik={{ ltik }}">Student Files</a>
+          <a href="{{ url_for('lti.student_files') }}?ltik={{ ltik }}">IV Files</a>
           {% endif %}
         </div>
 
-        <div class="card">
+        <!--<div class="card">
           <strong>Session Info:</strong><br>
           Platform: {{session.platform_issuer}}<br>
           User ID: {{session.user_id}}<br>
           Deployment: {{session.deployment_id}}<br>
           Roles: {{roles}}
-        </div>
+        </div>-->
       </div>
     </body>
     </html>
