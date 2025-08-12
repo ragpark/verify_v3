@@ -13,6 +13,28 @@ transfer to another storage facility.
 - JWKS and tool configuration endpoints to simplify external tool setup.
 - Simple file browser for testing and legacy workflows.
 
+## Use Cases and User Flow
+
+The tool supports standards verification workflows where an external verifier
+needs to sample course content and learner work for quality assurance.
+
+1. **Launch from the LMS** – After the tool is installed in a course, the
+   verifier opens it from the LMS. The landing page confirms the connection and
+   presents links to browse learner evidence or gather files for internal
+   verification.
+2. **Learner Files** – Staff members with instructor or admin roles can select a
+   course, choose a learner, and view all files retrieved from Moodle. Selected
+   files can be uploaded to the server for later review.
+3. **IV Files** – Administrators can view a combined list of students and their
+   files on a single page, making it easy to upload evidence from multiple
+   learners in one action.
+4. **Student view** – Learners launching the tool see a simple interface that
+   lists their existing uploads and provides a file upload form for submitting
+   evidence.
+
+Uploaded files are stored on the application server (default `/tmp/lti_files`)
+and can be downloaded or listed via the file browser endpoints.
+
 ## Requirements
 
 - Python 3.10+
