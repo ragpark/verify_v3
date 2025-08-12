@@ -1078,7 +1078,7 @@ def file_browser():
         html = """
         <html>
         <head>
-            <title>User Files</title>
+            <title>Learner Files</title>
             <style>
                 body { font-family: Arial, sans-serif; margin: 20px; }
                 .file-section { margin: 20px 0; }
@@ -1101,7 +1101,7 @@ def file_browser():
             </style>
         </head>
         <body>
-            <h1>User {{ selected_user }} Files</h1>
+            <h1>Learner {{ selected_user }} Files</h1>
             <p><a href="{{ back_url }}">&larr; Back to user list</a></p>
 
             <div class="info-box">
@@ -1113,7 +1113,7 @@ def file_browser():
             </div>
 
             <div class="file-section">
-                <h2>Moodle Files ({{ moodle_files|length }})</h2>
+                <h2>Course Files ({{ moodle_files|length }})</h2>
                 {% if uploaded is not none %}
                     <p>{{ uploaded }} file(s) uploaded.</p>
                 {% endif %}
@@ -1139,7 +1139,7 @@ def file_browser():
                 {% endif %}
             </div>
 
-            <div class="file-section">
+            <!--<div class="file-section">
                 <h2>Local Uploads ({{ local_files|length }})</h2>
                 {% if not local_files %}
                     <p>No local uploads for this user.</p>
@@ -1151,12 +1151,12 @@ def file_browser():
                     </div>
                     {% endfor %}
                 {% endif %}
-            </div>
+            </div>-->
 
             <div class="file-section">
-                <h2>Uploaded to Destination ({{ uploaded_files|length }})</h2>
+                <h2>Uploaded to SV Service ({{ uploaded_files|length }})</h2>
                 {% if not uploaded_files %}
-                    <p>No files uploaded to destination.</p>
+                    <p>No files uploaded to SV Storage.</p>
                 {% else %}
                     <ul>
                     {% for name in uploaded_files %}
