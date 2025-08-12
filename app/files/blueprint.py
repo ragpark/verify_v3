@@ -1746,8 +1746,18 @@ def file_browser():
                     resp = requests.get(url, timeout=10)
                     resp.raise_for_status()
                     filename = url.rsplit("/", 1)[-1].split("?")[0]
-                    with open(os.path.join(upload_dir, filename), "wb") as handle:
+                    path = os.path.join(upload_dir, filename)
+                    with open(path, "wb") as handle:
                         handle.write(resp.content)
+                    file_id = uuid.uuid4().hex
+                    info = {
+                        "id": file_id,
+                        "filename": filename,
+                        "path": path,
+                        "owner": selected_user,
+                    }
+                    save_file_metadata(info)
+                    local_files.append(info)
                     uploaded += 1
                 except Exception as err:  # pragma: no cover - network errors
                     current_app.logger.error(f"Failed to download {url}: {err}")
