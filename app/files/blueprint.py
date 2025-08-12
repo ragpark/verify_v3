@@ -1752,9 +1752,11 @@ def file_browser():
                 except Exception as err:  # pragma: no cover - network errors
                     current_app.logger.error(f"Failed to download {url}: {err}")
 
-        uploaded_files = []
-        if os.path.isdir(upload_dir):
-            uploaded_files = sorted(os.listdir(upload_dir))
+        # Rather than listing the upload directory directly, derive the
+        # uploaded file names from our in-memory metadata.  This ensures files
+        # appear even if the underlying file is missing (e.g., during tests
+        # where only metadata is populated).
+        uploaded_files = [f.get("filename") for f in local_files]
 
         back_url = url_for('files.file_browser', course_id=selected_course, ltik=ltik) if selected_course \
             else url_for('files.file_browser', ltik=ltik)
