@@ -561,8 +561,32 @@ def get_enrolled_users(course_id=None):
     if not data:
         return []
 
+    if isinstance(data, dict):
+        current_app.logger.warning(
+            "Expected list from core_enrol_get_enrolled_users for course %s, got dict: %s",
+            course_id,
+            data.get("message", data),
+        )
+        return []
+
+    if not isinstance(data, list):
+        current_app.logger.warning(
+            "Expected list from core_enrol_get_enrolled_users for course %s, got %s",
+            course_id,
+            type(data).__name__,
+        )
+        return []
+
     filtered_users = []
     for u in data:
+        if not isinstance(u, dict):
+            current_app.logger.warning(
+                "Skipping malformed enrolled user entry for course %s: %r",
+                course_id,
+                u,
+            )
+            continue
+
         username = u.get("username", "")
         if username in ["guest", "apiuser"]:
             continue

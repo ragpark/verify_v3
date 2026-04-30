@@ -205,3 +205,45 @@ def test_student_files_shows_uploaded_list(client, tmp_path, monkeypatch):
     assert (tmp_path / "loaded.txt").exists()
     assert b"loaded.txt" in resp.data
 
+
+
+def test_get_enrolled_users_handles_error_dict(app, monkeypatch):
+    from app.files import blueprint
+
+    with app.test_request_context():
+        monkeypatch.setattr(
+            blueprint,
+            "moodle_api_call",
+            lambda function, params=None: {
+                "exception": "moodle_exception",
+                "errorcode": "invalidparameter",
+                "message": "Invalid course id",
+            },
+        )
+
+        assert blueprint.get_enrolled_users(course_id=123) == []
+
+
+def test_get_enrolled_users_skips_non_dict_entries(app, monkeypatch):
+    from app.files import blueprint
+
+    with app.test_request_context():
+        monkeypatch.setattr(
+            blueprint,
+            "moodle_api_call",
+            lambda function, params=None: [
+                "bad-entry",
+                {"id": 7, "username": "student1", "fullname": "Student One", "email": "s1@example.com"},
+            ],
+        )
+
+        users = blueprint.get_enrolled_users(course_id=123)
+        assert users == [
+            {
+                "id": 7,
+                "username": "student1",
+                "fullname": "Student One",
+                "email": "s1@example.com",
+                "roles": [],
+            }
+        ]
