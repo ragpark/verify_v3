@@ -94,3 +94,7 @@ Useful helper routes:
 ## Notes
 
 This implementation stores files and session metadata in memory and the filesystem. For production deployments, integrate with persistent storage and secure session management.
+
+## Moodle LMS Setup Guide
+
+For a step-by-step administrator + developer setup guide, see `docs/moodle_lti_setup_guide.md`.
