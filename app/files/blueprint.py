@@ -549,17 +549,21 @@ def get_user_courses(user_id: int):
         return []
 
 
-def get_enrolled_users(course_id=None):
-    """Return users enrolled in a specific course."""
+def get_enrolled_users(course_id=None, include_error: bool = False):
+    """Return users enrolled in a specific course.
+
+    When include_error=True, returns a tuple: (users, error_message).
+    """
     if not course_id:
         course_id = session.get("context_id")
 
     if not course_id:
-        return []
+        return ([], "Missing course context ID") if include_error else []
 
     data = moodle_api_call("core_enrol_get_enrolled_users", {"courseid": course_id})
     if not data:
-        return []
+        msg = "Moodle API returned no data for enrolled users"
+        return ([], msg) if include_error else []
 
     if isinstance(data, dict):
         current_app.logger.warning(
@@ -567,7 +571,7 @@ def get_enrolled_users(course_id=None):
             course_id,
             data.get("message", data),
         )
-        return []
+        return ([], data.get("message", "Moodle returned an API error")) if include_error else []
 
     if not isinstance(data, list):
         current_app.logger.warning(
@@ -600,7 +604,7 @@ def get_enrolled_users(course_id=None):
         }
         filtered_users.append(user_info)
 
-    return filtered_users
+    return (filtered_users, None) if include_error else filtered_users
 
 
 def get_all_users(limit=200, offset=0):
@@ -1248,7 +1252,7 @@ def file_browser():
             return render_template_string(html, courses=courses, ltik=ltik)
 
         # Get users enrolled in the selected course
-        users = get_enrolled_users(course_id)
+        users, users_error = get_enrolled_users(course_id, include_error=True)
         context_title = session.get("context_title", f"Course {course_id}")
 
         html = """
@@ -1679,6 +1683,15 @@ def file_browser():
             <h1>File Browser</h1>
         </div>
         
+        {% if users_error %}
+        <div class="warning">
+            <div class="warning-icon"></div>
+            <div class="warning-content">
+                <strong>Enrollment API warning:</strong> {{ users_error }}. Check Moodle token permissions and external service function access.
+            </div>
+        </div>
+        {% endif %}
+
         {% if not (base_url and token) %}
         <div class="warning">
             <div class="warning-icon"></div>
@@ -1749,7 +1762,8 @@ def file_browser():
             base_url=base_url,
             token=token,
             context_title=context_title,
-            selected_course=course_id
+            selected_course=course_id,
+            users_error=users_error
         )
 
     # Admin + user selected: show that user's Moodle files and local uploads
